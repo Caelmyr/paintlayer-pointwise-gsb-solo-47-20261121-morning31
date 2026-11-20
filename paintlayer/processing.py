@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import fields
+from .alignment import inline_png, measure as measure_alignment, parse_radius, render_preview
 from .calibration import Correction, correct_plate
 from .compare import Comparison, change_map
 from .errors import CapacityExceeded, ExamError, InsufficientSupport
@@ -158,31 +159,52 @@ class Processing:
             return None
         return get_array(queries, case_id, record['id'], label)
 
+    def plate_inputs(self, queries, case_id, raw, extent):
+        placements = Placement.parse_many(raw.get('placements'), extent)
+        records = [self.run(queries, case_id, entry.plate_id, {'plate'}) for entry in placements]
+        units = {record['details']['unit'] for record in records}
+        if len(units) != 1:
+            raise ExamError('Use plates calibrated in the same unit.', field='placements')
+        total_extent = sum(np.prod(entry['details']['extent'], dtype=np.int64) for entry in records)
+        if total_extent > MAX_PLATE_INPUT_PIXELS:
+            raise CapacityExceeded('These plates would exceed their safe total input dimensions.')
+        plates = [
+            PlateData(
+                placement=placement,
+                surface=self.surface(queries, case_id, record),
+                weights=get_array(queries, case_id, record['id'], 'weight'),
+                reason_flags=get_array(queries, case_id, record['id'], 'reasons'),
+                label=record['name'],
+            )
+            for placement, record in zip(placements, records, strict=True)
+        ]
+        return placements, records, plates, units.pop()
+
+    def align(self, case_id, form):
+        """Compare overlaps and propose small shifts without storing or moving anything."""
+        raw = fields.request_object(form)
+        radius = parse_radius(raw)
+        with self.store.snapshot() as queries:
+            case = queries.case(case_id)
+            extent = case_extent(case)
+            placements, _, plates, _ = self.plate_inputs(queries, case_id, raw, extent)
+        result, skipped = measure_alignment(plates, extent, radius)
+        report = result.report() | {
+            'arrangement': [item.as_json() for item in placements],
+            'alternatives': result.alternatives(),
+            'proposals': result.proposals(),
+            'skipped_plates': skipped,
+        }
+        return {'report': report, 'preview': inline_png(render_preview(result))}
+
     def assemble(self, case_id, form):
         raw = fields.request_object(form)
         radius = fields.integer(raw.get('radius', 30), field='radius', minimum=0, maximum=350)
         with self.store.snapshot() as queries:
             case = queries.case(case_id)
             extent = case_extent(case)
-            placements = Placement.parse_many(raw.get('placements'), extent)
-            records = [self.run(queries, case_id, entry.plate_id, {'plate'}) for entry in placements]
-            units = {record['details']['unit'] for record in records}
-            if len(units) != 1:
-                raise ExamError('Assemble only plates calibrated in the same unit.', field='placements')
-            total_extent = sum(np.prod(entry['details']['extent'], dtype=np.int64) for entry in records)
-            if total_extent > MAX_PLATE_INPUT_PIXELS:
-                raise CapacityExceeded('This assembly would exceed its safe total input dimensions.')
-            inputs = [
-                PlateData(
-                    placement=placement,
-                    surface=self.surface(queries, case_id, record),
-                    weights=get_array(queries, case_id, record['id'], 'weight'),
-                    reason_flags=get_array(queries, case_id, record['id'], 'reasons'),
-                    label=record['name'],
-                )
-                for placement, record in zip(placements, records, strict=True)
-            ]
-        product = assemble(inputs, extent, radius, units.pop())
+            placements, records, inputs, unit = self.plate_inputs(queries, case_id, raw, extent)
+        product = assemble(inputs, extent, radius, unit)
         arrays = {
             'signal': product.surface.pixels,
             'support': product.surface.valid,
@@ -195,6 +217,8 @@ class Processing:
             'session_dates': sorted({row['details']['session_date'] for row in records if row['details']['session_date']}),
             'placements': [item.as_json() for item in placements],
         }
+        if raw.get('alignment') is not None:
+            details['alignment'] = fields.request_object(raw['alignment'], field='alignment')
         output = RunOutput(details, arrays, [(record, 'calibrated_tile') for record in records])
         return self.persist(case_id, 'mosaic', name_or(raw, 'Assembled radiograph'), output)
 

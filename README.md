@@ -33,6 +33,7 @@ Open the training examination for a fictional painting with an invented acquisit
 | Sources → Inspect | Examine metadata, sample a neighbourhood in native detector counts and download the original file. |
 | Sources → New profile / Workbench → Calibrate plate | Select dark and flat references and an optional acquisition mask. Inspect the relative attenuation or transmission surface, confidence and flagged sample classes. |
 | Workbench → Assemble radiograph | Place calibrated plates by integer position, quarter turns and optional mirror. Review the confidence-weighted assembly, dominant plate, coverage and overlap spread. |
+| Workbench → Assemble radiograph → Align overlapping plates | Compare every pair's common area within a small search radius and preview which plates a single translation can be trusted to fix. Positions are only written on Apply; plates with competing shifts, narrow overlap or too few samples stay put and offer the positions that remain possible. |
 | Workbench → Register photograph | Pick matching landmarks to fit similarity or affine geometry. Review the mapped image, held-out residuals and grid. |
 | Workbench → Radiograph, Overlay or More layers | Adjust window, gamma, palette and radiograph/visible composition. The working data remains quantitative. |
 | Workbench → Trace region / Regions | Outline a canonical canvas region and add exclusion rings in its editor. Each edit increments the region revision. Saved findings preserve the outline used when they were captured. |
@@ -52,11 +53,14 @@ An imported image can be at most 28 MiB, 4096 pixels on a side and five million 
 
 Values are relative and depend on the acquisition conditions. The calibrated blend is a confidence-weighted feathered mean. Difference classification carries overlap disagreement as a heuristic uncertainty, and stretcher/texture inspection summarizes patterns from known sample support. These are not absolute material identification or instruments for physical radiation acquisition.
 
+Overlap alignment is a translation-only refinement of the positions you entered. It compares the shared canvas area of each plate pair on a band-pass surface that suppresses the smooth detector trend, so a repeated weave can score almost as well at several offsets. A pair counts as confirmed only when a single shift clearly beats every alternative at least five pixels away, on enough usable samples and with a common area wide and tall enough to pin both axes; otherwise the pair is reported as ambiguous, narrow, too sparse or at the search limit, and the affected plate is left untouched. Confirmed shifts are fitted together so a pair that disagrees with the rest cannot drag a plate away, and a group-wide slide that overlaps cannot measure is never invented. The preview tint and the status columns mark common areas as confirmed, pending or unresolved, and only confirmed shifts (or alternatives you pick explicitly) reach the position fields. Rotation and mirror are compared as given, not solved.
+
 ## Source structure
 
 - `paintlayer/web.py` and `paintlayer/__main__.py` provide the HTTP and Waitress entry points.
 - `paintlayer/library.py`, `paintlayer/store.py` and `paintlayer/intake.py` maintain the notebook, blob references and image ingestion.
 - `paintlayer/processing.py` joins detector correction, placement, registration and quantitative outputs.
+- `paintlayer/alignment.py` compares plate overlaps and classifies which translation, if any, the common area supports.
 - `paintlayer/views.py`, `paintlayer/evidence.py` and the atlas modules generate presentation and portable reports.
 - `static/` holds the browser entry point and examination controls. All resources are local.
 

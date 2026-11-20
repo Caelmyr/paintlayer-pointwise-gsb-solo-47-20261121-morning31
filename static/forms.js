@@ -142,14 +142,178 @@ export function correctionForm(ctx, isProfile = false, preferred = "") {
   }
 }
 
+function placementRows(list) {
+  return [...list.children].map(row => ({
+    plate:row.querySelector("[name=plate]").value,
+    x:Number(row.querySelector("[name=x]").value),
+    y:Number(row.querySelector("[name=y]").value),
+    turns:Number(row.querySelector("[name=turns]").value),
+    mirror:row.querySelector("[name=mirror]").checked,
+    emphasis:Number(row.querySelector("[name=emphasis]").value),
+  }));
+}
+
+function applyPlacements(list, placements) {
+  const rows = new Map([...list.children].map(row => [row.querySelector("[name=plate]").value, row]));
+  for (const placement of placements) {
+    const row = rows.get(placement.plate);
+    if (!row) continue;
+    row.querySelector("[name=x]").value = placement.x;
+    row.querySelector("[name=y]").value = placement.y;
+  }
+}
+
+const alignmentStatusLabels = {
+  confident:"Confirmed", anchored:"Fixed reference", uncertain:"Needs a decision", unresolved:"Unresolved",
+};
+const pairStatusLabels = {
+  confident:"Confirmed", ambiguous:"Competing shifts", narrow_overlap:"Narrow overlap",
+  weak_support:"Too few samples", inconclusive:"Inconclusive", beyond_search:"At search limit",
+  inconsistent:"Disagrees", separated:"No overlap", too_large:"Too large", over_budget:"Skipped",
+};
+
+function alignmentPanel(ctx, list, radiusInput, state) {
+  const preview = el("div", {});
+  const readout = el("div", {});
+  const choices = new Map();
+
+  function rows() {
+    return placementRows(list).filter(row => row.plate);
+  }
+
+  function optionLabel(option) {
+    const shift = option.delta.map(value => (value > 0 ? `+${value}` : String(value))).join(", ");
+    return `Shift ${shift} px · score ${number(option.score, 3)} · ${option.basis}`;
+  }
+
+  function plateTable(report) {
+    const alternatives = report.alternatives || {};
+    const body = report.plates.map(row => {
+      const options = alternatives[row.plate] || [];
+      let control = el("span", {cls:"muted"}, "—");
+      if (row.status === "uncertain" && options.length) {
+        const pick = el("select", {"aria-label":`Position for ${row.label}`},
+          el("option", {value:""}, "Hold at current position"),
+          options.map((option, index) => el("option", {value:String(index)}, optionLabel(option))));
+        pick.addEventListener("change", () => {
+          if (pick.value === "") choices.delete(row.plate);
+          else choices.set(row.plate, options[Number(pick.value)]);
+        });
+        control = pick;
+      }
+      return [
+        `${row.index}. ${row.label}`,
+        row.current.join(", "),
+        row.status === "confident" ? signed(row.delta) : "held",
+        row.status === "confident" ? row.proposed.join(", ") : "—",
+        el("span", {cls:`alignment-tag ${row.status}`, title:row.note}, alignmentStatusLabels[row.status] || row.status),
+        control,
+      ];
+    });
+    return table(["Plate", "Now", "Shift", "New position", "Status", "Alternative"], body);
+  }
+
+  function signed(values) {
+    return values.map(value => (value > 0 ? `+${value}` : String(value))).join(", ");
+  }
+
+  function describe(report) {
+    const s = report.summary;
+    const notes = [
+      `${s.confident_pairs} of ${s.pairs} pairs agree on one shift`,
+      `${s.plates_moved} plate(s) would move`,
+      `${s.plates_held} plate(s) need your decision`,
+    ];
+    return el("div", {},
+      el("div", {cls:"stat-cards"},
+        stat("Confirmed pairs", `${s.confident_pairs}/${s.pairs}`),
+        stat("Plates to move", s.plates_moved),
+        stat("Held for review", s.plates_held),
+        stat("Largest shift · px", s.largest_shift)),
+      el("p", {cls:"inline-message"}, notes.join(" · ")),
+      s.skipped_plates.length ? el("p", {cls:"inline-message"}, `Not compared: ${s.skipped_plates.join(", ")}.`) : null,
+      preview,
+      plateTable(report),
+      table(["Pair", "Shift", "Score", "Margin", "Samples", "Span", "Status"], report.pairs.map(row => [
+        `${row.first_index}–${row.second_index}`, row.shift ? row.shift.join(", ") : "—",
+        number(row.score, 3), number(row.margin, 3), number(row.samples, 0),
+        row.span ? `${row.span[0]} × ${row.span[1]}` : "—",
+        el("span", {cls:`alignment-tag ${row.status}`, title:row.note}, pairStatusLabels[row.status] || row.status)])),
+      report.legend?.length ? details("How to read the statuses", report.legend) : null,
+      el("div", {cls:"bar"},
+        button("Apply positions", () => {
+          const current = rows();
+          const next = current.map(row => {
+            const proposal = report.proposals[row.plate];
+            if (proposal?.status === "confident") return {...row, x:proposal.proposed[0], y:proposal.proposed[1]};
+            const chosen = choices.get(row.plate);
+            return chosen ? {...row, x:row.x + chosen.delta[0], y:row.y + chosen.delta[1]} : row;
+          });
+          applyPlacements(list, next);
+          const moved = next.filter((row, index) => row.x !== current[index].x || row.y !== current[index].y).length;
+          state.record = {
+            status: "applied",
+            confirmed_pairs: s.confident_pairs,
+            pairs: s.pairs,
+            moved,
+            held: s.plates_held,
+            chosen_alternatives: [...choices.values()].filter(Boolean).length,
+            search_radius: report.radius,
+          };
+          readout.replaceChildren(el("p", {cls:"inline-message"},
+            `${moved} position(s) were written into the fields. Plates marked as needing a decision keep the position you selected or their current value.`));
+          preview.replaceChildren();
+          choices.clear();
+        }, "primary"),
+        button("Discard", () => {
+          preview.replaceChildren();
+          readout.replaceChildren();
+          choices.clear();
+          state.record = null;
+        }, "clear")));
+  }
+
+  const buttonRun = button("Check overlap alignment", async () => {
+    readout.replaceChildren(el("p", {cls:"placeholder"}, "Comparing common areas…"));
+    buttonRun.disabled = true;
+    try {
+      const placements = rows();
+      if (placements.length < 2) {
+        readout.replaceChildren(el("p", {cls:"form-error"}, "Add at least two calibrated plates to compare."));
+        return;
+      }
+      const result = await api(`${ctx.root}/runs/align`, "POST", {placements, radius:Number(radiusInput.value) || 8});
+      choices.clear();
+      readout.replaceChildren(describe(result.report));
+      if (result.preview) {
+        preview.replaceChildren(el("img", {cls:"alignment-preview", src:result.preview,
+          alt:"Overlap alignment preview: green common areas are confirmed, amber and red areas still need a decision"}));
+      }
+    } catch (error) {
+      readout.replaceChildren(el("p", {cls:"form-error"}, error.message));
+    } finally {
+      buttonRun.disabled = false;
+    }
+  });
+  return {controls: el("div", {cls:"bar"}, buttonRun,
+      el("small", {}, "Compares every pair within the search radius below. Nothing moves until you apply.")),
+    body: readout};
+}
+
 export function mosaicForm(ctx) {
   const list = el("div", {cls:"fields"});
   const plates = runs(ctx, "plate");
   const visit = ctx.mosaic();
+  const radiusInput = input("Blend radius · px", "radius", "number", visit?.details.blend_radius ?? 30, {min:0,max:350});
+  const searchInput = input("Alignment search radius · px", "search", "number", 8, {min:0,max:32});
+  const state = {record:null};
+  const alignment = alignmentPanel(ctx, list, searchInput, state);
   const fieldGroup = el("div", {cls:"fields"}, input("Assembly name", "name", "text", "", {required:true}),
-    input("Blend radius · px", "radius", "number", visit?.details.blend_radius ?? 30, {min:0,max:350}),
+    radiusInput,
     el("p", {cls:"placeholder"}, "Place calibrated plates in shared canvas pixels. Negative positions clip to the canvas. Rotate after optional horizontal mirroring."),
-    list, button("Add plate", () => addRow()));
+    list, button("Add plate", () => addRow()),
+    el("h3", {cls:"dialog-section"}, "Align overlapping plates"),
+    searchInput, alignment.controls, alignment.body);
   function addRow(previous = {}) {
     const row = el("div", {cls:"option-row"},
       select("Calibrated plate", "plate", option(plates,"Choose plate"), previous.plate || "", {required:true}),
@@ -164,17 +328,12 @@ export function mosaicForm(ctx) {
   if (visit?.details.placements?.length) visit.details.placements.forEach(addRow);
   else addRow();
   showDialog("Assemble radiograph", [fieldGroup], async data => {
-    const placements = [...list.children].map(row => ({
-      plate:row.querySelector("[name=plate]").value,
-      x:Number(row.querySelector("[name=x]").value),
-      y:Number(row.querySelector("[name=y]").value),
-      turns:Number(row.querySelector("[name=turns]").value),
-      mirror:row.querySelector("[name=mirror]").checked,
-      emphasis:Number(row.querySelector("[name=emphasis]").value),
-    }));
-    const saved = await api(`${ctx.root}/runs/assemble`, "POST", {name:data.get("name"),radius:fnum(data,"radius",30),placements});
+    const placements = placementRows(list);
+    const payload = {name:data.get("name"),radius:fnum(data,"radius",30),placements};
+    if (state.record) payload.alignment = state.record;
+    const saved = await api(`${ctx.root}/runs/assemble`, "POST", payload);
     await ctx.chooseWorking(saved, "working");
-  }, {confirm:"Assemble plates",wide:true});
+  }, {confirm:"Assemble plates",wide:true,keepOpen:false});
 }
 
 function fitRect(image) {

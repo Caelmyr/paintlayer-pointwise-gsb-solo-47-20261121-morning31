@@ -263,6 +263,7 @@ def create_app(runtime):
         handler = {
             'calibrate': processing.calibrate,
             'assemble': processing.assemble,
+            'align': processing.align,
             'register': processing.register,
             'quality': processing.audit,
             'support': processing.support,
@@ -270,7 +271,7 @@ def create_app(runtime):
         }.get(operation)
         if handler is None:
             raise MissingRecord('This imaging operation is unavailable.')
-        return handler(case_id, body()), 201
+        return handler(case_id, body()), 200 if operation == 'align' else 201
 
     @app.get('/api/cases/<case_id>/runs/<run_id>/view.png')
     @image_work

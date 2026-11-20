@@ -319,6 +319,9 @@ function runReadout(ctx,run) {
   if(kind==="mosaic") return el("div",{},
     el("div",{cls:"stat-cards"},stat("Usable samples",percent(d.support.fraction)),stat("Placed plates",d.tiles.length),
       stat("Overlap pixels",number(d.coverage.multi_tile,0)),stat("Median spread",number(d.median_overlap_spread))),
+    d.alignment && el("p",{cls:"inline-message"},
+      `Positions refined by overlap alignment: ${d.alignment.confirmed_pairs ?? "—"} of ${d.alignment.pairs ?? "—"} pairs confirmed, ` +
+      `${d.alignment.moved ?? 0} position(s) changed${d.alignment.held ? `, ${d.alignment.held} plate(s) left for review` : ""}.`),
     numericalHistogram(d.distribution),
     ctx.state.layer==="coverage" && legend([["#437078","One plate"],["#62a59e","Two plates"],["#99c8a2","Three or more"]]),
     details("Plate contributions",d.tiles));
