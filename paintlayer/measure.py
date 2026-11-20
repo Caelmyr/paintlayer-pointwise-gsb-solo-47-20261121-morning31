@@ -6,12 +6,14 @@ import math
 import numpy as np
 
 from . import fields
-from .errors import InsufficientSupport, InvalidGeometry
+from .errors import ExamError, InsufficientSupport, InvalidGeometry
 from .geometry import bilinear_values, outline_pixels
 from .raster import histogram, support_summary
 from .settings import MAX_PROFILE_SAMPLES
 
 PERCENTILES = (5, 25, 50, 75, 95)
+BAND_SIDES = {'above', 'below'}
+BAND_IN, BAND_OUT, BAND_UNKNOWN = 1, 0, -1
 
 
 def describe_values(values):
@@ -158,6 +160,209 @@ class Transect:
         return self.length * positions, centres, across
 
 
+@dataclass(frozen=True)
+class BandRequest:
+    side: str
+    baseline_window: float
+    min_width: float
+    bridge_gap: float
+
+    @classmethod
+    def parse(cls, raw):
+        window = raw.get('baseline_window')
+        min_width = raw.get('min_width')
+        bridge_gap = raw.get('bridge_gap')
+        return cls(
+            side=fields.choice(raw.get('band_side'), field='band_side', options=BAND_SIDES),
+            baseline_window=fields.scalar(window if window is not None else 0, field='baseline_window', minimum=0, maximum=1000),
+            min_width=fields.scalar(min_width if min_width is not None else 2, field='min_width', minimum=0, maximum=200),
+            bridge_gap=fields.scalar(bridge_gap if bridge_gap is not None else 2, field='bridge_gap', minimum=0, maximum=100),
+        )
+
+
+def moving_baseline(signal, accepted, window_stations):
+    count = signal.size
+    half = window_stations // 2
+    values = np.where(accepted, signal, np.nan)
+    padded = np.pad(values, half, constant_values=np.nan)
+    windows = np.lib.stride_tricks.sliding_window_view(padded, window_stations)
+    minimum = max(3, window_stations // 3)
+    baseline = np.full(count, np.nan)
+    for start in range(0, count, 256):
+        chunk = windows[start:start + 256]
+        enough = np.count_nonzero(np.isfinite(chunk), axis=1) >= minimum
+        medians = np.full(chunk.shape[0], np.nan)
+        if np.any(enough):
+            medians[enough] = np.nanmedian(chunk[enough], axis=1)
+        baseline[start:start + chunk.shape[0]] = medians
+    # Stations closer than half a window to either end use the largest centred window instead.
+    for station in list(range(min(half, count))) + list(range(max(count - half, 0), count)):
+        shrink = min(half, station, count - 1 - station)
+        size = 2 * shrink + 1
+        if size < 5:
+            baseline[station] = np.nan
+            continue
+        local = values[station - shrink:station + shrink + 1]
+        local = local[np.isfinite(local)]
+        baseline[station] = float(np.median(local)) if local.size >= max(3, size // 3) else np.nan
+    return baseline
+
+
+def classify_bands(corrected, classifiable, threshold, side):
+    states = np.full(corrected.shape, BAND_UNKNOWN, dtype=np.int8)
+    inside = corrected > threshold if side == 'above' else corrected < threshold
+    states[classifiable] = BAND_OUT
+    states[classifiable & inside] = BAND_IN
+    return states
+
+
+def maximal_runs(states, target):
+    runs = []
+    index = 0
+    while index < len(states):
+        if states[index] == target:
+            first = index
+            while index + 1 < len(states) and states[index + 1] == target:
+                index += 1
+            runs.append((first, index))
+        index += 1
+    return runs
+
+
+def clean_band_states(states, positions, spacing, bridge_gap, min_width):
+    cleaned = states.copy()
+    last_index = len(states) - 1
+    if min_width > 0:
+        for first, last in maximal_runs(cleaned, BAND_IN):
+            if first == 0 or last == last_index:
+                continue
+            if cleaned[first - 1] == BAND_OUT and cleaned[last + 1] == BAND_OUT:
+                if positions[last] - positions[first] + spacing < min_width - 1e-9:
+                    cleaned[first:last + 1] = BAND_OUT
+    if bridge_gap > 0:
+        for first, last in maximal_runs(cleaned, BAND_OUT):
+            if first == 0 or last == last_index:
+                continue
+            if cleaned[first - 1] == BAND_IN and cleaned[last + 1] == BAND_IN:
+                if positions[last] - positions[first] + spacing <= bridge_gap + 1e-9:
+                    cleaned[first:last + 1] = BAND_IN
+    return cleaned
+
+
+def interpolate_crossing(positions, values, threshold, outer, inner):
+    a, b = float(values[outer]), float(values[inner])
+    fraction = 0.5 if b == a else min(1.0, max(0.0, (threshold - a) / (b - a)))
+    return float(positions[outer] + fraction * (positions[inner] - positions[outer]))
+
+
+def locate_edge(states, positions, corrected, threshold, boundary, direction):
+    neighbour = boundary + direction
+    if 0 <= neighbour < len(states) and states[neighbour] == BAND_OUT:
+        outer, inner = (neighbour, boundary) if direction < 0 else (boundary, neighbour)
+        point = interpolate_crossing(positions, corrected, threshold, outer, inner)
+        return 'resolved', point, point, False
+    scan = neighbour
+    while 0 <= scan < len(states) and states[scan] == BAND_UNKNOWN:
+        scan += direction
+    may_continue = 0 <= scan < len(states) and states[scan] == BAND_IN
+    if direction < 0:
+        if scan >= 0:
+            return 'gap', float(positions[scan]), float(positions[boundary]), may_continue
+        return 'open', None, float(positions[boundary]), False
+    if scan < len(states):
+        return 'gap', float(positions[boundary]), float(positions[scan]), may_continue
+    return 'open', float(positions[boundary]), None, False
+
+
+def edge_report(edge, scale):
+    kind, lower, upper, may_continue = edge
+    if kind == 'resolved':
+        position = lower
+    elif lower is not None and upper is not None:
+        position = (lower + upper) / 2
+    else:
+        position = None
+    return {
+        'kind': kind,
+        'position': position,
+        'lower': lower,
+        'upper': upper,
+        'position_mm': position * scale if scale and position is not None else None,
+        'lower_mm': lower * scale if scale and lower is not None else None,
+        'upper_mm': upper * scale if scale and upper is not None else None,
+        'may_continue': may_continue,
+    }
+
+
+def band_items(states, positions, corrected, threshold, scale):
+    items = []
+    for first, last in maximal_runs(states, BAND_IN):
+        start = edge_report(locate_edge(states, positions, corrected, threshold, first, -1), scale)
+        end = edge_report(locate_edge(states, positions, corrected, threshold, last, 1), scale)
+        width_min = max(0.0, end['lower'] - start['upper'])
+        if start['lower'] is not None and end['upper'] is not None:
+            width_max = max(width_min, end['upper'] - start['lower'])
+            width = (width_min + width_max) / 2
+        else:
+            width_max = None
+            width = None
+        items.append({
+            'index': len(items) + 1,
+            'stations': [int(first), int(last)],
+            'span': [float(positions[first]), float(positions[last])],
+            'span_mm': [float(positions[first] * scale), float(positions[last] * scale)] if scale else None,
+            'start': start,
+            'end': end,
+            'width': width,
+            'width_min': width_min,
+            'width_max': width_max,
+            'width_mm': width * scale if scale and width is not None else None,
+            'width_min_mm': width_min * scale if scale else None,
+            'width_max_mm': width_max * scale if scale and width_max is not None else None,
+            'resolved': start['kind'] == 'resolved' and end['kind'] == 'resolved',
+        })
+    return items
+
+
+def measure_bands(distances, signal, accepted, threshold, request, scale, unit):
+    spacing = float(distances[1] - distances[0]) if len(distances) > 1 else 1.0
+    effective = signal
+    classifiable = accepted
+    baseline = None
+    if request.baseline_window > 0:
+        window_stations = int(round(request.baseline_window / spacing))
+        if window_stations < 5:
+            raise ExamError(
+                f'Use a background window of at least {5 * spacing:.3g} px for this sample interval.',
+                field='baseline_window',
+            )
+        window_stations += 1 - window_stations % 2
+        baseline = moving_baseline(signal, accepted, window_stations)
+        residual = signal - baseline
+        classifiable = accepted & np.isfinite(residual)
+        states = classify_bands(residual, classifiable, threshold, request.side)
+        excluded = np.zeros(signal.shape, dtype=bool)
+        for first, last in maximal_runs(states, BAND_IN):
+            if distances[last] - distances[first] + spacing >= request.min_width - 1e-9:
+                excluded[first:last + 1] = True
+        if np.any(excluded):
+            baseline = moving_baseline(signal, accepted & ~excluded, window_stations)
+        effective = signal - baseline
+        classifiable = accepted & np.isfinite(baseline)
+    states = classify_bands(effective, classifiable, threshold, request.side)
+    states = clean_band_states(states, distances, spacing, request.bridge_gap, request.min_width)
+    report = {
+        'side': request.side,
+        'threshold': threshold,
+        'baseline_window': request.baseline_window or None,
+        'min_width': request.min_width,
+        'bridge_gap': request.bridge_gap,
+        'units': unit,
+        'items': band_items(states, distances, effective, threshold, scale),
+    }
+    return report, effective, classifiable, baseline
+
+
 def aggregate_profile(values, usable, aggregator):
     if aggregator == 'mean':
         return float(np.mean(values[usable], dtype=np.float64))
@@ -219,7 +424,7 @@ def threshold_crossings(positions, values, valid, threshold):
     return events
 
 
-def transect_measurement(surface, definition, *, scale, unit, threshold=None):
+def transect_measurement(surface, definition, *, scale, unit, threshold=None, band_request=None):
     distances, centres, grid = definition.position_grid()
     values, valid, _ = bilinear_values(surface.pixels, surface.valid, grid[..., 0], grid[..., 1])
     common = np.count_nonzero(valid, axis=1)
@@ -242,7 +447,12 @@ def transect_measurement(surface, definition, *, scale, unit, threshold=None):
             'contributors': int(contributors),
             'possible': count,
         })
-    crossings = threshold_crossings(distances, signal, accepted, threshold) if threshold is not None else []
+    effective, classifiable, baseline, bands = signal, accepted, None, None
+    if band_request is not None and threshold is not None:
+        bands, effective, classifiable, baseline = measure_bands(
+            distances, signal, accepted, threshold, band_request, scale, unit,
+        )
+    crossings = threshold_crossings(distances, effective, classifiable, threshold) if threshold is not None else []
     return {
         'definition': definition.as_json(),
         'length': float(distances[-1]),
@@ -251,6 +461,8 @@ def transect_measurement(surface, definition, *, scale, unit, threshold=None):
         'summary': describe_values(signal[accepted]),
         'threshold': threshold,
         'crossings': crossings,
+        'baseline': [float(value) if np.isfinite(value) else None for value in baseline] if baseline is not None else None,
+        'bands': bands,
         'segments': break_intervals(distances, accepted),
         'samples': samples,
     }

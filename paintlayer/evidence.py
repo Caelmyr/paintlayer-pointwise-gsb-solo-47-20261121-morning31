@@ -138,6 +138,35 @@ def transect_csv(result):
     return csv_values(result['samples'], ('x', 'y', 'distance', 'distance_mm', 'value', 'contributors', 'possible'))
 
 
+def bands_csv(result):
+    bands = result['bands']
+    rows = []
+    for item in bands['items']:
+        start, end = item['start'], item['end']
+        rows.append({
+            'band': item['index'],
+            'side': bands['side'],
+            'start_px': start['position'],
+            'end_px': end['position'],
+            'width_px': item['width'],
+            'width_min_px': item['width_min'],
+            'width_max_px': item['width_max'],
+            'start_mm': start['position_mm'],
+            'end_mm': end['position_mm'],
+            'width_mm': item['width_mm'],
+            'width_min_mm': item['width_min_mm'],
+            'width_max_mm': item['width_max_mm'],
+            'resolved': 'resolved' if item['resolved'] else 'estimated',
+            'start_edge': start['kind'],
+            'end_edge': end['kind'],
+        })
+    return csv_values(rows, (
+        'band', 'side', 'start_px', 'end_px', 'width_px', 'width_min_px', 'width_max_px',
+        'start_mm', 'end_mm', 'width_mm', 'width_min_mm', 'width_max_mm',
+        'resolved', 'start_edge', 'end_edge',
+    ))
+
+
 def quality_csv(record):
     rows = []
     keys = ('class', 'area_pixels', 'left', 'top', 'width', 'height', 'peak_score')

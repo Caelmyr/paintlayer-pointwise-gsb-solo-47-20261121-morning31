@@ -3,7 +3,7 @@
 from . import fields
 from .detector import DetectorCheck, flat_diagnostics
 from .errors import ExamError
-from .evidence import area_csv, csv_values, transect_csv
+from .evidence import area_csv, bands_csv, csv_values, transect_csv
 from .library import public_record
 from .texture import TextureRead, analyze_texture
 
@@ -100,7 +100,10 @@ class Analysis:
         case_id = case['id']
         run = self.processing.run(queries, case_id, form.get('run'), {'mosaic'})
         report = self.processing.transect(case_id, form)
-        return report, [('csv', transect_csv(report))], [(run, 'numerical_source')]
+        blobs = [('csv', transect_csv(report))]
+        if report.get('bands') is not None:
+            blobs.append(('bands', bands_csv(report)))
+        return report, blobs, [(run, 'numerical_source')]
 
 
 def wrap_inline_png(payload):

@@ -37,7 +37,7 @@ Open the training examination for a fictional painting with an invented acquisit
 | Workbench → Radiograph, Overlay or More layers | Adjust window, gamma, palette and radiograph/visible composition. The working data remains quantitative. |
 | Workbench → Trace region / Regions | Outline a canonical canvas region and add exclusion rings in its editor. Each edit increments the region revision. Saved findings preserve the outline used when they were captured. |
 | Measurements → Measure region / Compare regions | Inspect usable support, detector statistics, thresholds and distributions with canvas and optional physical area figures. |
-| Workbench → Place transect | Pick endpoints and measure a strip along the canvas. Missing stations remain gaps in the plot and CSV; threshold events use only adjacent supported stations. |
+| Workbench → Place transect | Pick endpoints and measure a strip along the canvas. Missing stations remain gaps in the plot and CSV; threshold events use only adjacent supported stations. Optional band widths follow a moving-median background, bridge narrow dips, keep narrow passages, and report an edge range where missing stations censor a crossing. |
 | Workbench → Audit acquisition quality | Generate a reason map and connected components for overlap disagreement, missing data, sparse coverage, impulses and clipping. |
 | Workbench → Inspect stretcher bands | Consider long horizontal and vertical contrast structures with usable fraction and supporting extent. The results are visual hypotheses. |
 | Measurements → Inspect texture | Inspect spatial frequency, directional strength and possible repeat spacing in a bounded patch. |

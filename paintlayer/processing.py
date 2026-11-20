@@ -10,7 +10,7 @@ from .compare import Comparison, change_map
 from .errors import CapacityExceeded, ExamError, InsufficientSupport
 from .geometry import stored_outline
 from .library import case_extent, expected_revision, get_array, public_record
-from .measure import Transect, area_measurement, compare_outlines, pixel_probe, transect_measurement
+from .measure import BandRequest, Transect, area_measurement, compare_outlines, pixel_probe, transect_measurement
 from .mosaic import Placement, PlateData, assemble
 from .quality import QualityGate, quality_audit, quality_scores
 from .raster import Surface, as_bytes, display_range
@@ -363,7 +363,15 @@ class Processing:
         definition = Transect.parse(raw, source.extent)
         threshold = raw.get('threshold')
         threshold = fields.scalar(threshold, field='threshold', minimum=-40, maximum=66000) if threshold is not None else None
-        return transect_measurement(source, definition, scale=case['scale'], unit=run['details']['unit'], threshold=threshold) | {'run': run['id']}
+        band_request = None
+        if raw.get('band_side'):
+            if threshold is None:
+                raise ExamError('Set a crossing threshold to measure band widths.', field='threshold')
+            band_request = BandRequest.parse(raw)
+        return transect_measurement(
+            source, definition, scale=case['scale'], unit=run['details']['unit'],
+            threshold=threshold, band_request=band_request,
+        ) | {'run': run['id']}
 
     def run_probe(self, case_id, run_id, form):
         raw = fields.request_object(form)

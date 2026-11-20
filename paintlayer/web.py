@@ -377,6 +377,8 @@ def file_representation(record, label):
         return 'application/zip', '.zip', False
     if kind == 'analysis' and label == 'csv':
         return 'text/csv', '.csv', False
+    if kind == 'analysis' and label == 'bands':
+        return 'text/csv', '-bands.csv', False
     if kind == 'analysis' and label in {'preview', 'flags', 'spectrum'}:
         return 'image/png', f'-{label}.png', True
     if kind in {'source', 'run'}:

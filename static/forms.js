@@ -320,8 +320,17 @@ function transectControls(ctx, custom) {
     ),
     fieldsGrid(select("Station summary","aggregate",[["median","Median"],["mean","Mean"]]),
       input("Crossing threshold (optional)","threshold","number","",{step:"any"})),
+    fieldsGrid(select("Band widths","band_side",[["","Crossing events only"],["above","Bands above threshold"],["below","Bands below threshold"]],"above"),
+      input("Background window · px","baseline_window","number","",{min:0,max:1000,step:"any"})),
+    el("div",{cls:"field-grid three"},
+      input("Bridge dips up to · px","bridge_gap","number",2,{min:0,max:100,step:"any"}),
+      input("Smallest band · px","min_width","number",2,{min:0,max:200,step:"any"}),
+    ),
+    el("p",{cls:"placeholder"},"Band widths need a crossing threshold. A background window subtracts a moving median of that span — choose it well above the widest band — so a slowly rising background does not shift the crossings. Passages narrower than the smallest band are dropped first, then dips up to the bridge span are ignored. Edges that fall on missing stations are reported as a possible range, not a single position."),
   ],data=>({run:data.get("run"),start:jspec(data,"start"),end:jspec(data,"end"),half_width:fnum(data,"half_width",2),
-    step:fnum(data,"step",1),min_fraction:fnum(data,"min_fraction",.5),aggregate:data.get("aggregate"),threshold:fnum(data,"threshold")})];
+    step:fnum(data,"step",1),min_fraction:fnum(data,"min_fraction",.5),aggregate:data.get("aggregate"),threshold:fnum(data,"threshold"),
+    band_side:data.get("band_side") || null,baseline_window:fnum(data,"baseline_window",0),
+    min_width:fnum(data,"min_width",2),bridge_gap:fnum(data,"bridge_gap",2)})];
 }
 
 function textureControls(ctx) {
@@ -386,8 +395,143 @@ function chartFor(samples, leftKey, topKey, label) {
   return graph;
 }
 
+function transectChart(report) {
+  const width=730,height=196;
+  const graph=el("canvas",{width,height,cls:"chart","aria-label":"Measured density profile with threshold band widths",role:"img"});
+  const paint=graph.getContext("2d");
+  const samples=report.samples;
+  const usable=samples.filter(row=>row.value!==null && Number.isFinite(row.value));
+  if(!usable.length) return graph;
+  const baseline=report.baseline || null;
+  const threshold=report.threshold;
+  const bands=report.bands?.items || [];
+  const minX=0,maxX=report.length;
+  const ys=usable.map(row=>row.value);
+  let minY=Math.min(...ys),maxY=Math.max(...ys);
+  if(baseline) for(const value of baseline){
+    if(value===null || !Number.isFinite(value)) continue;
+    minY=Math.min(minY,value);maxY=Math.max(maxY,value);
+    if(threshold!==null && threshold!==undefined){minY=Math.min(minY,value+threshold);maxY=Math.max(maxY,value+threshold);}
+  }
+  if(!baseline && threshold!==null && threshold!==undefined){minY=Math.min(minY,threshold);maxY=Math.max(maxY,threshold);}
+  if(minY===maxY){minY-=.5;maxY+=.5;}
+  const x=value=>49+(value-minX)/Math.max(1e-7,maxX-minX)*(width-69);
+  const y=value=>height-24-(value-minY)/(maxY-minY)*(height-44);
+  paint.lineWidth=1;
+  paint.strokeStyle="#3e443b";
+  paint.fillStyle="#c0baa8";
+  paint.font="10px system-ui";
+  for(let row=0;row<=4;row++){
+    const value=minY+(maxY-minY)*row/4;
+    paint.beginPath();paint.moveTo(45,y(value));paint.lineTo(width-18,y(value));paint.stroke();
+    paint.fillText(number(value,3),5,y(value)+4);
+  }
+  paint.fillText(number(minX),48,height-6);
+  paint.fillText(number(maxX),width-44,height-6);
+  const top=14,bottom=height-24;
+  for(const item of bands){
+    const zone=(a,b,fill)=>{
+      if(a===null || b===null) return;
+      paint.fillStyle=fill;
+      paint.fillRect(x(a),top,Math.max(1,x(b)-x(a)),bottom-top);
+    };
+    zone(item.start.lower ?? minX,item.start.upper,"rgba(216,168,106,0.30)");
+    zone(item.end.lower,item.end.upper ?? maxX,"rgba(216,168,106,0.30)");
+    zone(item.span[0],item.span[1],"rgba(140,208,184,0.28)");
+    const tick=(value,dash,color)=>{
+      if(value===null || value===undefined) return;
+      paint.strokeStyle=color;paint.setLineDash(dash);paint.beginPath();
+      paint.moveTo(x(value),top);paint.lineTo(x(value),bottom);paint.stroke();paint.setLineDash([]);
+    };
+    for(const edge of [item.start,item.end]){
+      if(edge.kind==="resolved") tick(edge.position,[],"#8cd0b8");
+      else{tick(edge.lower,[3,3],"#d8a86a");tick(edge.upper,[3,3],"#d8a86a");}
+    }
+  }
+  if(bands.length){
+    paint.fillStyle="#e8e2d2";
+    paint.textAlign="center";
+    for(const item of bands){
+      const mid=(x(item.start.upper ?? minX)+x(item.end.lower ?? maxX))/2;
+      paint.fillText(bandWidthText(item),mid,11);
+    }
+    paint.textAlign="start";
+  }
+  const trace=(valueAt,color,dash,lineWidth)=>{
+    paint.strokeStyle=color;paint.lineWidth=lineWidth;paint.setLineDash(dash);
+    paint.beginPath();
+    let started=false;
+    samples.forEach((row,index)=>{
+      const value=valueAt(row,index);
+      if(value===null || value===undefined || !Number.isFinite(value)){started=false;return;}
+      if(started) paint.lineTo(x(row.distance),y(value));
+      else paint.moveTo(x(row.distance),y(value));
+      started=true;
+    });
+    paint.stroke();paint.setLineDash([]);paint.lineWidth=1;
+  };
+  if(baseline) trace((row,index)=>baseline[index],"#8fb5df",[],1);
+  if(threshold!==null && threshold!==undefined){
+    if(baseline) trace((row,index)=>baseline[index]===null ? null : baseline[index]+threshold,"#d87f6a",[4,3],1);
+    else{
+      paint.strokeStyle="#d87f6a";paint.setLineDash([4,3]);paint.beginPath();
+      paint.moveTo(45,y(threshold));paint.lineTo(width-18,y(threshold));paint.stroke();paint.setLineDash([]);
+    }
+  }
+  trace(row=>row.value,"#d8a86a",[],2);
+  const legendItems=[["#d8a86a","Profile"]];
+  if(baseline) legendItems.push(["#8fb5df","Background"],["#d87f6a","Threshold over background"]);
+  else if(threshold!==null && threshold!==undefined) legendItems.push(["#d87f6a","Threshold"]);
+  if(bands.length) legendItems.push(["#8cd0b8","Measured band"],["#a88a5c","Edge range"]);
+  return el("div",{},graph,el("div",{cls:"legend"},legendItems.map(([color,label])=>
+    el("span",{},el("i",{style:{backgroundColor:color},"aria-hidden":"true"}),label))));
+}
+
+function bandEdgeText(edge, which) {
+  if(edge.kind==="resolved") return number(edge.position);
+  if(edge.kind==="open") return which==="start" ? `≤ ${number(edge.upper)}` : `≥ ${number(edge.lower)}`;
+  return `${number(edge.lower)} – ${number(edge.upper)}`;
+}
+
+function bandWidthText(item, suffix="") {
+  const width=item[`width${suffix}`],lower=item[`width_min${suffix}`],upper=item[`width_max${suffix}`];
+  if(item.resolved) return number(width);
+  if(upper===null || upper===undefined) return `≥ ${number(lower)}`;
+  return `${number(width)} ± ${number((upper-lower)/2)}`;
+}
+
+function bandNotes(item) {
+  const notes=[];
+  for(const [label,edge] of [["Start",item.start],["End",item.end]]){
+    if(edge.kind==="gap") notes.push(`${label.toLowerCase()} edge inside a ${number(edge.upper-edge.lower)} px gap`);
+    if(edge.kind==="open") notes.push(`${label.toLowerCase()} edge unbounded at the transect end`);
+    if(edge.may_continue) notes.push(`${label.toLowerCase()} side may join a neighbouring band across missing data`);
+  }
+  return notes.join("; ") || "—";
+}
+
+function bandSettingsText(bands) {
+  const parts=[`Passages ${bands.side} a threshold of ${number(bands.threshold)} ${bands.units}`];
+  parts.push(bands.baseline_window ? `background followed over ${number(bands.baseline_window)} px` : "no background subtraction");
+  parts.push(`dips up to ${number(bands.bridge_gap)} px bridged`);
+  parts.push(`passages under ${number(bands.min_width)} px dropped`);
+  return parts.join(" · ");
+}
+
+function transectBandsTable(bands) {
+  return table(["#","Start · px","End · px","Width · px","Width · mm","Edge certainty"],bands.items.map(item=>[
+    item.index,
+    bandEdgeText(item.start,"start"),
+    bandEdgeText(item.end,"end"),
+    bandWidthText(item),
+    item.width_mm===null || item.width_mm===undefined ? "—" : bandWidthText(item,"_mm"),
+    item.resolved ? "Resolved" : bandNotes(item),
+  ]));
+}
+
 export function analysisResult(ctx,kind,report,record=null) {
   const extras = record ? [download("Download CSV",fileUrl(ctx.root,record.id,"csv"))] : [];
+  if(record?.details?.bands) extras.push(download("Bands CSV",fileUrl(ctx.root,record.id,"bands")));
   let components;
   if(kind==="area"){
     const distribution=report.distribution;
@@ -401,9 +545,15 @@ export function analysisResult(ctx,kind,report,record=null) {
       report.thresholds && el("p",{cls:"inline-message"},`${percent(report.thresholds.inside_fraction)} of measured samples fall inside the selected thresholds.`),
     ];
   }else if(kind==="transect"){
+    const bands=report.bands;
     components=[
-      chartFor(report.samples,"distance","value","Measured density profile with gaps for unsupported stations"),
-      el("div",{cls:"stat-cards"},stat("Length",`${number(report.length)} px`),stat("Supported stations",number(report.summary.count,0))),
+      transectChart(report),
+      el("div",{cls:"stat-cards"},stat("Length",`${number(report.length)} px`),stat("Supported stations",number(report.summary.count,0)),
+        bands && stat("Bands measured",bands.items.length)),
+      bands && el("p",{cls:"placeholder"},bandSettingsText(bands)),
+      bands && bands.items.length===0 && el("p",{cls:"inline-message"},
+        "No passage stayed beyond the threshold after bridging narrow dips and dropping narrow passages. Adjust the background window, bridge span or smallest band width."),
+      bands && bands.items.length>0 && transectBandsTable(bands),
       table(["Start · px","End · px","Status"],report.segments.map(part=>[number(part.start),number(part.finish),part.supported ? "Measured":"Gap"])),
       report.crossings.length>0 && table(["Threshold event","Start · px","End · px"],report.crossings.map(item=>[item.kind,number(item.distance),number(item.interval_end)])),
     ];
