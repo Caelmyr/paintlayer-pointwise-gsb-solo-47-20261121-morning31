@@ -8,6 +8,14 @@ function done(ctx, message, record, options = {}) {
   return ctx.changed(message, record, options);
 }
 
+function detailEligible(ctx) {
+  if(ctx.state.source){
+    const source=ctx.data.sources.find(item=>item.id===ctx.state.source);
+    return Boolean(source && ["radiograph","dark","flat"].includes(source.details.role));
+  }
+  return ["signal","raw"].includes(ctx.state.layer);
+}
+
 export function caseForm(open, existing = null) {
   const fields = [
     input("Examination title", "title", "text", existing?.title || "", {required:true, maxLength:96}),
@@ -473,12 +481,15 @@ export function findingForm(ctx) {
     alertUser("Open a result in the shared canvas before capturing evidence.","error");
     return;
   }
+  const detailOn=ctx.state.display.detail?.enabled && detailEligible(ctx);
   const fields=el("div",{cls:"fields"},
     input("Finding title","name","text","",{required:true}),
     fieldsGrid(select("Finding status","status",[["observation","Observation"],["review","Needs review"],["confirmed","Confirmed"]]),
       select("Crop to region","region",option(ctx.data.regions,"Use entire canvas"),region || "")),
     area("Examination note","note","",{maxLength:3500}),
-    el("p",{cls:"placeholder"},"The snapshot records the current presentation, source hashes and, where available, the measured region."));
+    el("p",{cls:"placeholder"},detailOn
+      ? "The snapshot uses the current local-detail view at this position: crop boundaries and greys match the full image. The tone mapping is display-only; raw measurements and validity masks stay unchanged and remain in the evidence bundle."
+      : "The snapshot records the current presentation, source hashes and, where available, the measured region. Raw measurements are never altered by display settings."));
   showDialog("Capture examination finding",[fields],async data=>{
     const payload={run:current.id,name:data.get("name"),status:data.get("status"),region:data.get("region"),note:data.get("note"),
       display:ctx.state.display};

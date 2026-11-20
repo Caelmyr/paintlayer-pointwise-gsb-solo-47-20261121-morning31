@@ -13,7 +13,8 @@ const nav = [
 ];
 const app=document.querySelector("#app");
 const tabs=document.querySelector("#main-nav");
-const displayDefault=()=>({limits:null,gamma:1,invert:false,palette:"grayscale"});
+const displayDefault=()=>({limits:null,gamma:1,invert:false,palette:"grayscale",
+  detail:{enabled:false,sigma:null,strength:1.6}});
 const overlayDefault=()=>({mode:"blend",opacity:.48,division:.5,block:72});
 const ctx={
   data:null,

@@ -57,7 +57,10 @@ def image_field(raw, format_name):
 
 
 def img_query():
-    display_fields = {'gamma': 'float', 'limits': 'list', 'invert': 'bool', 'palette': 'text'}
+    display_fields = {
+        'gamma': 'float', 'limits': 'list', 'invert': 'bool', 'palette': 'text',
+        'detail_enabled': 'bool', 'detail_sigma': 'float', 'detail_strength': 'float',
+    }
     view_fields = {'mode': 'text', 'opacity': 'float', 'division': 'float', 'block': 'int'}
     display = {
         name: image_field(request.args[name], kind)

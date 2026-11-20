@@ -35,6 +35,7 @@ Open the training examination for a fictional painting with an invented acquisit
 | Workbench → Assemble radiograph | Place calibrated plates by integer position, quarter turns and optional mirror. Review the confidence-weighted assembly, dominant plate, coverage and overlap spread. |
 | Workbench → Register photograph | Pick matching landmarks to fit similarity or affine geometry. Review the mapped image, held-out residuals and grid. |
 | Workbench → Radiograph, Overlay or More layers | Adjust window, gamma, palette and radiograph/visible composition. The working data remains quantitative. |
+| Workbench → Standard / Local detail | Switch the radiograph to a display-only local tone mapping that keeps usable tones in both dark and bright areas while checking faint underdrawing. It uses one wide local-average scale with a soft-capped detail layer: no sharpening, no halo, and enhancement fades out beside unsupported samples so masked edges are never redrawn. Stored rasters and measurements are never modified. A finding captured in this view renders the crop from the full-frame transform, so its boundaries and greys match the same position in the full image. |
 | Workbench → Trace region / Regions | Outline a canonical canvas region and add exclusion rings in its editor. Each edit increments the region revision. Saved findings preserve the outline used when they were captured. |
 | Measurements → Measure region / Compare regions | Inspect usable support, detector statistics, thresholds and distributions with canvas and optional physical area figures. |
 | Workbench → Place transect | Pick endpoints and measure a strip along the canvas. Missing stations remain gaps in the plot and CSV; threshold events use only adjacent supported stations. |
@@ -51,6 +52,8 @@ The working representation uses zero-based pixel centres, x from the left and y 
 An imported image can be at most 28 MiB, 4096 pixels on a side and five million pixels. An examination canvas can contain up to six million pixels. One assembly can use at most 16 plates and 22 million aggregate plate pixels. ZIP, sheet and case allowances bound long-running work and storage. The demo uses 718 × 545 canvas pixels. The TIFF export accompanying each numerical layer carries a separate validity mask. A valid numerical zero is a measurement. Current runs retain the input region and session revisions they used. Evidence exports from older workspaces flag historical revisions whose original state cannot be recovered.
 
 Values are relative and depend on the acquisition conditions. The calibrated blend is a confidence-weighted feathered mean. Difference classification carries overlap disagreement as a heuristic uncertainty, and stretcher/texture inspection summarizes patterns from known sample support. These are not absolute material identification or instruments for physical radiation acquisition.
+
+Window, gamma, palette and the Local detail inspection only change screen rendering and the presentation recorded with a finding. They never rewrite detector counts, calibrated rasters, validity masks or measurements; evidence bundles still export the original numerical TIFFs. Local detail parameters (`detail_sigma`, `detail_strength`) are validated server-side and stored in the finding's display record so a captured crop can be re-rendered identically.
 
 ## Source structure
 

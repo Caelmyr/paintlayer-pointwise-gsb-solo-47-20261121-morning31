@@ -60,9 +60,39 @@ function preferredLayers(ctx,run) {
   return (runLayers[kind] || []).filter(key=>key!=="overlay" || ctx.data.case.registration_run);
 }
 
+// Local detail is a tone inspection for quantitative grayscale rasters only.
+// Colour-coded maps and registered photographs keep their fixed encoding.
+function detailAvailable(ctx,run) {
+  if(ctx.state.source){
+    const source=ctx.data.sources.find(item=>item.id===ctx.state.source);
+    return Boolean(source && ["radiograph","dark","flat"].includes(source.details.role));
+  }
+  if(!run) return false;
+  return ["signal","raw"].includes(ctx.state.layer);
+}
+
+function detailExtent(ctx,selected,run) {
+  return ctx.state.source ? [selected.details.width,selected.details.height] : run.details.extent;
+}
+
+function ensureDetailScale(ctx,selected,run) {
+  const detail=ctx.state.display.detail;
+  if(detail.sigma===null){
+    const [width,height]=detailExtent(ctx,selected,run);
+    detail.sigma=Math.round(Math.min(96,Math.max(24,Math.min(width,height)*0.06)));
+  }
+  return detail;
+}
+
 function imageHref(ctx,current) {
-  const query = new URLSearchParams({edge:1800,gamma:ctx.state.display.gamma,palette:ctx.state.display.palette,invert:ctx.state.display.invert ? "1":"0"});
-  if(ctx.state.display.limits) query.set("limits",ctx.state.display.limits.join(","));
+  const display=ctx.state.display;
+  const query = new URLSearchParams({edge:1800,gamma:display.gamma,palette:display.palette,invert:display.invert ? "1":"0"});
+  if(display.limits) query.set("limits",display.limits.join(","));
+  if(display.detail.enabled && display.detail.sigma){
+    query.set("detail_enabled","1");
+    query.set("detail_sigma",display.detail.sigma);
+    query.set("detail_strength",display.detail.strength);
+  }
   if(ctx.state.source) return `${ctx.root}/sources/${ctx.state.source}/view.png?${query}`;
   if(ctx.state.layer==="overlay"){
     Object.entries(ctx.state.overlay).forEach(([key,value])=>query.set(key,value));
@@ -77,6 +107,7 @@ function controlsBar(ctx,run,selected) {
   const source=ctx.state.source;
   const layers=source ? [] : preferredLayers(ctx,run);
   if(!source && layers.length && !layers.includes(ctx.state.layer)) ctx.state.layer=layers[0];
+  if(ctx.state.display.detail.enabled && !detailAvailable(ctx,run)) ctx.state.display.detail.enabled=false;
   const main=layers.slice(0,3);
   const overflow=layers.slice(3);
   const tab=el("div",{cls:"segments","aria-label":"View mode"},main.map(layer=>
@@ -92,7 +123,21 @@ function controlsBar(ctx,run,selected) {
   const mainContent=source ? badge(sourceRoles[selected?.details.role] || "Source") : main.length ? tab : el("span",{cls:"muted"},"No image selected");
   const zoomSmall=button("−",()=>{ctx.state.zoom=Math.max(.5,ctx.state.zoom-.25);ctx.render();},"clear icon","Zoom out");
   const zoomBig=button("+",()=>{ctx.state.zoom=Math.min(5,ctx.state.zoom+.25);ctx.render();},"clear icon","Zoom in");
-  return el("div",{cls:"view-bar"},mainContent,
+  let detailSwitch=null;
+  if(detailAvailable(ctx,run)){
+    const active=ctx.state.display.detail.enabled;
+    const choose=enabled=>()=>{
+      if(enabled) ensureDetailScale(ctx,selected,run);
+      ctx.state.display.detail.enabled=enabled;
+      ctx.render();
+    };
+    detailSwitch=el("div",{cls:"segments detail-switch","aria-label":"Inspection tone mapping"},
+      el("button",{type:"button",cls:!active?"active":"","aria-pressed":String(!active),onclick:choose(false),
+        title:"Standard window and gamma"},"Standard"),
+      el("button",{type:"button",cls:active?"active":"","aria-pressed":String(active),onclick:choose(true),
+        title:"Gentle local contrast that keeps tones in bright and dark areas"},"Local detail"));
+  }
+  return el("div",{cls:"view-bar"},el("div",{cls:"bar"},mainContent,detailSwitch),
     el("div",{cls:"bar"},run && !source && ["mosaic","registration"].includes(run.details.kind) &&
       button("Use in workspace",()=>ctx.chooseWorking(run,run.details.kind==="mosaic"?"working":"photograph"),"clear"),
     zoomSmall,button(`${Math.round(ctx.state.zoom*100)}%`,()=>{ctx.state.zoom=1;ctx.render();},"clear","Reset zoom"),zoomBig));
@@ -291,6 +336,18 @@ function imageControls(ctx,run) {
     [["grayscale","Grayscale"],["warm","Warm tone"],["cool","Cool tone"]].map(([key,label])=>el("option",{value:key},label)));
   palette.value=values.palette;
   fields.push(palette);
+  if(detailAvailable(ctx,run)){
+    const detail=values.detail;
+    const detailNote=el("p",{cls:"placeholder detail-note"},
+      "Display-only local tone mapping. Stored measurements are unchanged; no sharpening is applied, so edges are never redrawn.");
+    if(detail.enabled){
+      fields.push(detailNote,
+        slider("Detail strength",detail.strength,1,2.2,.05,value=>{ctx.state.display.detail={...detail,strength:value};ctx.render();}),
+        slider("Local scale · px",detail.sigma,8,400,2,value=>{ctx.state.display.detail={...detail,sigma:value};ctx.render();}));
+    }else{
+      fields.push(detailNote);
+    }
+  }
   if(ctx.state.layer==="overlay"){
     const overlay=ctx.state.overlay;
     const change=(key,value)=>{overlay[key]=value;ctx.render();};

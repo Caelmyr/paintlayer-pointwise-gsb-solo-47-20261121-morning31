@@ -5,12 +5,12 @@ import math
 
 import numpy as np
 
-from . import fields
+from . import fields, raster
 from .errors import ExamError
 from .library import get_array
 from .raster import (
-    Surface, color_indexed, constrained_preview, display_range, photo_rgba,
-    png_bytes, radiograph_rgba,
+    Surface, color_indexed, constrained_preview, display_range, local_detail_surface,
+    photo_rgba, png_bytes, radiograph_rgba,
 )
 
 NIGHT = (0, 0, 0, 0)
@@ -49,6 +49,10 @@ DISPLAY_LAYERS = {
     'support': {'signal', 'support', 'classification', 'response'},
 }
 SCALED_LAYERS = {'spread', 'uncertainty'}
+# Layers rendered through the window/gamma pipeline where the local detail inspection
+# is meaningful. Classification, masks and registered photographs are quantitative
+# encodings and must keep their fixed colours.
+DETAIL_LAYERS = {'signal', 'raw'}
 VIEW_MODES = {'blend', 'split', 'checker'}
 IMAGE_DEFAULTS = {'registration': 'photo', 'compare': 'difference'}
 
@@ -59,6 +63,9 @@ class Presentation:
     gamma: float
     invert: bool
     palette: str
+    detail_enabled: bool = False
+    detail_sigma: float | None = None
+    detail_strength: float | None = None
 
     @classmethod
     def parse(cls, raw):
@@ -68,7 +75,20 @@ class Presentation:
         scaling = fields.scalar(raw.get('gamma', 1), field='gamma', minimum=0.25, maximum=4)
         invert = fields.flag(raw.get('invert', False), field='invert')
         palette = fields.choice(raw.get('palette', 'grayscale'), field='palette', options={'grayscale', 'warm', 'cool'})
-        return cls(lower_upper, scaling, invert, palette)
+        detail_enabled = fields.flag(raw.get('detail_enabled', False), field='detail_enabled')
+        detail_sigma = None
+        if raw.get('detail_sigma') is not None:
+            detail_sigma = fields.scalar(
+                raw.get('detail_sigma'), field='detail_sigma',
+                minimum=raster.DETAIL_SIGMA_MIN, maximum=raster.DETAIL_SIGMA_MAX,
+            )
+        detail_strength = None
+        if raw.get('detail_strength') is not None:
+            detail_strength = fields.scalar(
+                raw.get('detail_strength'), field='detail_strength',
+                minimum=raster.DETAIL_STRENGTH_MIN, maximum=raster.DETAIL_STRENGTH_MAX,
+            )
+        return cls(lower_upper, scaling, invert, palette, detail_enabled, detail_sigma, detail_strength)
 
     def as_json(self):
         return {
@@ -76,7 +96,14 @@ class Presentation:
             'gamma': self.gamma,
             'invert': self.invert,
             'palette': self.palette,
+            'detail_enabled': self.detail_enabled,
+            'detail_sigma': self.detail_sigma,
+            'detail_strength': self.detail_strength,
         }
+
+    @property
+    def detail_active(self):
+        return self.detail_enabled and self.detail_sigma is not None and self.detail_strength is not None
 
 
 @dataclass(frozen=True)
@@ -114,6 +141,13 @@ def display_lut(rgba, palette):
 
 
 def display_numerical(surface, presentation, limits):
+    if presentation.detail_active:
+        surface = local_detail_surface(
+            surface,
+            limits=limits,
+            sigma=presentation.detail_sigma,
+            strength=presentation.detail_strength,
+        )
     rgba = radiograph_rgba(
         surface,
         limits=presentation.limits or limits,
@@ -237,9 +271,15 @@ class Views:
         return constrained_preview(rgba, edge)
 
     def render(self, queries, case_id, run, layer, presentation, crop=None):
+        # Local detail tone mapping needs the neighbourhood of every visible sample,
+        # so its signal layers are kept at full extent and clipped only after the
+        # display transform. A crop then matches the full image pixel for pixel.
+        full_frame = crop is not None and presentation.detail_active and layer in DETAIL_LAYERS
         numeric = get_array(queries, case_id, run['id'], layer)
-        values = clipped_array(numeric, crop)
+        values = numeric if full_frame else clipped_array(numeric, crop)
         kind = run['details']['kind']
+        if full_frame:
+            return self.signal_layer(queries, case_id, run, layer, values, presentation, crop, full_frame=True)
         if layer == 'support':
             return color_indexed(values.astype(np.uint8), (NIGHT, COLORS['aqua']))
         if layer == 'photo':
@@ -286,13 +326,29 @@ class Views:
         maximum = max(0.001, high, float(legend or 0))
         return gradient_rgba(values, positive, (0, maximum), (61, 60, 90, 140), COLORS['gold'])
 
-    def signal_layer(self, queries, case_id, run, layer, values, presentation, crop):
+    def signal_layer(self, queries, case_id, run, layer, values, presentation, crop, *, full_frame=False):
         actual = run['details']
+        support_full = get_array(queries, case_id, run['id'], 'support')
+        if full_frame:
+            # Values and support cover the whole raster so the local average sees
+            # every neighbour. The window is likewise derived globally, then the final
+            # RGBA is clipped: identical greys to the same position in the full view.
+            if layer == 'raw':
+                valid = np.ones(values.shape, dtype=bool)
+                limits = display_range(values, valid)
+            else:
+                valid = support_full
+                limits = actual.get('display') or display_range(values, support_full)
+            if layer == 'difference':
+                return clipped_array(diverging_rgba(values, valid, presentation.limits or limits), crop)
+            rgba = display_numerical(Surface(values, valid), presentation, limits)
+            return clipped_array(rgba, crop)
+        support = clipped_array(support_full, crop)
         if layer == 'raw':
             valid = np.ones(values.shape, dtype=bool)
             limits = display_range(values, valid)
         else:
-            valid = clipped_array(get_array(queries, case_id, run['id'], 'support'), crop)
+            valid = support
             limits = actual.get('display') or display_range(values, valid)
         if layer == 'difference':
             return diverging_rgba(values, valid, presentation.limits or limits)

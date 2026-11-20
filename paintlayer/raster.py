@@ -7,9 +7,20 @@ import warnings
 
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
+from scipy import ndimage
 
 from .errors import CapacityExceeded, ImageFormatError, InsufficientSupport
 from .settings import MAX_SIDE, MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS, MIN_IMAGE_EDGE
+
+# Display-only local tone mapping for inspecting faint underdrawing. The transform is
+# never written back into the stored rasters and uses a single wide local-average
+# scale, so it cannot produce the two-sided ringing of an edge-sharpening kernel.
+DETAIL_CAP = 0.30
+DETAIL_BACKGROUND_LEVEL = 0.60
+DETAIL_SIGMA_MIN = 8.0
+DETAIL_SIGMA_MAX = 400.0
+DETAIL_STRENGTH_MIN = 1.0
+DETAIL_STRENGTH_MAX = 2.2
 
 DETECTOR_MODES = {'L', 'I', 'I;16', 'I;16L', 'I;16B', 'I;16N'}
 VISIBLE_MODES = {'RGB', 'RGBA', 'L', 'LA', 'P', 'CMYK'}
@@ -267,6 +278,51 @@ def radiograph_rgba(surface, *, limits, gamma=1.0, negative=False):
     result[..., 3] = accepted.astype(np.uint8) * 255
     result[~accepted] = 0
     return result
+
+
+def local_detail_surface(surface, *, limits, sigma, strength):
+    """Return a display-only Surface with gentle local contrast redistribution.
+
+    The working rasters are not modified: the returned pixels are re-expressed in the
+    same measurement units as ``limits`` so the regular window and gamma pipeline
+    renders them. A single wide local average balances slow background changes, and
+    the detail layer passes through a soft saturating curve. Faint drawing therefore
+    keeps nearly linear gain while strong boundaries are capped to a one-sided lobe,
+    which avoids the halo of an outline drawn around an edge. Enhancement fades to
+    nothing beside unsupported samples so masked boundaries are never embellished.
+    """
+    low, high = limits
+    span = max(high - low, 1e-12)
+    accepted = surface.valid & np.isfinite(surface.pixels)
+    if not np.any(accepted):
+        return surface
+    windowed = np.zeros(surface.valid.shape, dtype=np.float32)
+    windowed[accepted] = (surface.pixels[accepted].astype(np.float32) - low) / span
+    mask = accepted.astype(np.float32)
+    # A normalized box average gives the same slow background estimate as a Gaussian
+    # but runs in linear time; the soft-capped detail layer makes the kernel shape
+    # indistinguishable at visible edges while preserving the single-lobe response.
+    diameter = max(3, int(round(4.0 * sigma)) | 1)
+    weights = ndimage.uniform_filter(mask, diameter, mode='constant', cval=0.0)
+    weights = np.maximum(weights, 1e-6)
+    local_mean = ndimage.uniform_filter(
+        windowed * mask, diameter, mode='constant', cval=0.0,
+    ) / weights
+    anchor = float(windowed[accepted].mean())
+    detail = windowed - local_mean
+    shaped_detail = DETAIL_CAP * np.tanh(strength * detail / DETAIL_CAP)
+    softened_background = anchor + DETAIL_BACKGROUND_LEVEL * (local_mean - anchor)
+    remapped = softened_background + shaped_detail
+    if accepted.all():
+        feather = np.ones(accepted.shape, dtype=np.float32)
+    else:
+        distance = ndimage.distance_transform_edt(accepted)
+        feather = np.clip(distance / sigma, 0.0, 1.0) ** 2
+    blended = anchor + (1.0 - feather) * (windowed - anchor) + feather * (remapped - anchor)
+    blended = np.clip(blended, 0.0, 1.0)
+    restored = np.zeros(surface.valid.shape, dtype=np.float32)
+    restored[accepted] = low + blended[accepted] * span
+    return Surface(restored, surface.valid)
 
 
 def photo_rgba(surface):
