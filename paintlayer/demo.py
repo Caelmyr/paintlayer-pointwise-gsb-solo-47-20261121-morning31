@@ -224,6 +224,33 @@ def detector_mask(take, tile, width=445, height=545):
     return mask
 
 
+def exposure_tile(attenuation, x_offset, *, exposure, dark, flat):
+    """Synthetic long/short exposure pair sharing one position and references."""
+    height, width = dark.shape
+    detector = attenuation[:, x_offset:x_offset + width]
+    rng = np.random.default_rng(91277 + (0 if exposure == 'long' else 1))
+    jitter = rng.normal(0, 92 if exposure == 'long' else 64, detector.shape)
+    transmission = np.exp(-detector)
+    gain = 1.75 if exposure == 'long' else 1.0
+    data = dark.astype(np.float32) + (flat.astype(np.float32) - dark) * transmission * gain + jitter
+    data[:, :3] = 65535
+    data[-3:, :] = 100
+    if exposure == 'long':
+        # Bright open-canvas readings exceed the detector ceiling in the long exposure.
+        data[transmission > 0.82] = 65535
+    else:
+        # The weaker exposure leaves the densest readings buried at or below the dark floor.
+        buried = data < dark + 4200
+        data[buried] = dark[buried] - rng.uniform(0, 90, int(np.count_nonzero(buried)))
+        # A short-exposure detector dropout band is readable only in the long take.
+        data[:, 118:122] = np.maximum(dark[:, 118:122].astype(np.int16) - 400, 0)
+        # A localized registration/response mismatch survives calibration as a genuine conflict.
+        data[212:226, 300:318] = np.clip(
+            data[212:226, 300:318].astype(np.int32) + 14500, 0, 65535,
+        )
+    return np.clip(np.rint(data), 0, 65535).astype(np.uint16)
+
+
 def image_case(library, name, role, pixels, case, session=None):
     as_tiff = role in {'dark', 'flat', 'radiograph'}
     extension = 'tiff' if as_tiff else 'png'
@@ -288,6 +315,20 @@ def create_exam(library, processing):
             })
             placements.append({'plate': plate['id'], 'x': left, 'y': 0})
         mosaics.append(processing.assemble(case_id, {'name': name, 'placements': placements, 'radius': 38}))
+    dual_session = library.create_session(case_id, {
+        'name': 'Dual-exposure bracket', 'date': '2026-10-02', 'purpose': 'Long and short detector exposure of one position',
+    })
+    bracket_left = width - 445
+    long_pixels = exposure_tile(scene.first, bracket_left, exposure='long', dark=dark, flat=flat)
+    short_pixels = exposure_tile(scene.first, bracket_left, exposure='short', dark=dark, flat=flat)
+    long_source = image_case(library, 'Bracket · long exposure', 'radiograph', long_pixels, case_id, dual_session['id'])
+    short_source = image_case(library, 'Bracket · short exposure', 'radiograph', short_pixels, case_id, dual_session['id'])
+    processing.merge_pair(case_id, {
+        'name': 'Bracket · merged correction',
+        'long': long_source['id'],
+        'short': short_source['id'],
+        'profile': profile['id'],
+    })
     points = [(50, 67), (620, 88), (612, 481), (80, 464)]
     photo_reg = processing.register(case_id, {
         'name': 'Registered visible reference',

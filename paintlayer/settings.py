@@ -42,7 +42,7 @@ RUN_KINDS = {
 }
 
 CASE_VIEWS = {
-    'plate': ('signal', 'support', 'weight', 'reasons', 'raw'),
+    'plate': ('signal', 'support', 'weight', 'reasons', 'raw', 'owner', 'conflict', 'residual'),
     'mosaic': ('signal', 'support', 'coverage', 'spread', 'owner', 'quality'),
     'registration': ('photo', 'support', 'grid'),
     'compare': ('difference', 'support', 'classification', 'uncertainty'),

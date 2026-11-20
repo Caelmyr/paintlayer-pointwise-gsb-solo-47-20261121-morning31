@@ -39,9 +39,11 @@ OWNER_PALETTE = (
 REASON_COLORS = tuple(COLORS[key] for key in ('gray', 'rust', 'gold', 'royal', 'violet'))
 QUALITY_COLORS = tuple(COLORS[key] for key in ('royal', 'gray', 'gold', 'rust', 'violet'))
 SUPPORT_COLORS = tuple(COLORS[key] for key in ('gold', 'pink', 'aqua', 'royal'))
+EXPOSURE_OWNER_PALETTE = (NIGHT, COLORS['gold'], COLORS['royal'])
+CONFLICT_PALETTE = (NIGHT, COLORS['rust'])
 
 DISPLAY_LAYERS = {
-    'plate': {'signal', 'support', 'weight', 'reasons', 'raw'},
+    'plate': {'signal', 'support', 'weight', 'reasons', 'raw', 'owner', 'conflict', 'residual'},
     'mosaic': {'signal', 'support', 'coverage', 'spread', 'owner', 'quality'},
     'registration': {'photo', 'support', 'grid'},
     'compare': {'difference', 'support', 'classification', 'uncertainty'},
@@ -250,8 +252,20 @@ class Views:
         if layer == 'coverage':
             return color_indexed(np.minimum(values, len(COVERAGE) - 1), COVERAGE)
         if layer == 'owner':
+            palette = EXPOSURE_OWNER_PALETTE if kind == 'plate' else OWNER_PALETTE
+            if kind == 'plate':
+                return color_indexed(values, palette)
             choices = np.where(values > 0, 1 + (values - 1) % (len(OWNER_PALETTE) - 1), 0)
-            return color_indexed(choices, OWNER_PALETTE)
+            return color_indexed(choices, palette)
+        if layer == 'conflict':
+            support = clipped_array(get_array(queries, case_id, run['id'], 'support'), crop)
+            marked = color_indexed(values.astype(np.uint8), CONFLICT_PALETTE)
+            marked[~support] = 0
+            return marked
+        if layer == 'residual':
+            support = clipped_array(get_array(queries, case_id, run['id'], 'support'), crop)
+            limits = (0, max(float(run['details'].get('settings', {}).get('conflict_tolerance', 0.09)) * 3, 1e-3))
+            return gradient_rgba(values, support, limits, (26, 50, 62, 78), COLORS['rust'])
         if layer in {'quality', 'reasons'}:
             return flag_palette(values, REASON_COLORS)
         if layer == 'classification':

@@ -142,6 +142,46 @@ export function correctionForm(ctx, isProfile = false, preferred = "") {
   }
 }
 
+export function mergeExposureForm(ctx) {
+  const radiographs = sources(ctx, "radiograph");
+  const parts = [
+    input("Result name", "name", "text", "Dual-exposure corrected plate"),
+    fieldsGrid(
+      select("Long exposure", "long", option(radiographs, "Choose the long exposure"), "", {required:true}),
+      select("Short exposure", "short", option(radiographs, "Choose the short exposure"), "", {required:true})),
+    fieldsGrid(
+      select("Correction profile", "profile", option(ctx.data.profiles, "Use reference fields below")),
+      select("Acquisition mask", "mask", option(sources(ctx,"mask"), "No mask"))),
+    el("div",{cls:"fields merge-references"},
+      fieldsGrid(select("Dark exposure", "dark", option(sources(ctx,"dark"),"No dark reference")),
+        select("Flat exposure", "flat", option(sources(ctx,"flat"),"No flat reference"))),
+      correctionFields()),
+    fieldsGrid(
+      input("Conflict tolerance · optical depth", "conflict_tolerance", "number", .09, {min:.005,max:2,step:"any"}),
+      input("Alignment outlier sigma", "alignment_sigma", "number", 3, {min:1.5,max:8,step:.1})),
+    el("p", {cls:"placeholder"},
+      "Both exposures are calibrated with the same references, then aligned onto the short exposure's "
+      + "numerical scale using the pixels both can read. Single-exposure pixels are recovered; pixels that "
+      + "disagree beyond the conflict tolerance stay measurable but are marked in the conflict layer."),
+  ];
+  const active = showDialog("Merge long and short exposure", [el("div",{cls:"fields"},parts)], async data => {
+    const payload = {
+      name:data.get("name"), long:data.get("long"), short:data.get("short"),
+      profile:data.get("profile") || null, mask:data.get("mask") || null,
+      ...correctionPayload(data),
+      conflict_tolerance:fnum(data,"conflict_tolerance",.09),
+      alignment_sigma:fnum(data,"alignment_sigma",3),
+    };
+    const saved = await api(`${ctx.root}/runs/merge-exposures`, "POST", payload);
+    await done(ctx, "Dual-exposure plate merged.", saved, {tab:"workbench"});
+  }, {confirm:"Merge exposures", wide:true});
+  active.form.elements.profile.addEventListener("change", () => {
+    const block = active.form.querySelector(".merge-references");
+    block.hidden = !!active.form.elements.profile.value;
+    block.style.display = block.hidden ? "none" : "";
+  });
+}
+
 export function mosaicForm(ctx) {
   const list = el("div", {cls:"fields"});
   const plates = runs(ctx, "plate");

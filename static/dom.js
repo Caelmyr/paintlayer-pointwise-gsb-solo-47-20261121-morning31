@@ -15,9 +15,10 @@ export const layerLabels = {
   coverage: "Coverage", spread: "Overlap spread", owner: "Dominant plate", quality: "Source warnings",
   weight: "Confidence", reasons: "Rejected pixels", raw: "Detector counts", grid: "Registration grid",
   difference: "Density change", classification: "Class map", uncertainty: "Uncertainty", response: "Response",
+  conflict: "Exposure conflicts", residual: "Conflict residual",
 };
 export const runLayers = {
-  plate: ["signal", "support", "weight", "reasons", "raw"],
+  plate: ["signal", "support", "weight", "reasons", "owner", "conflict", "residual", "raw"],
   mosaic: ["signal", "overlay", "coverage", "spread", "owner", "quality", "support"],
   registration: ["photo", "grid", "support"],
   compare: ["difference", "classification", "uncertainty", "support"],

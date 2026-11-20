@@ -7,6 +7,7 @@ import numpy as np
 from . import fields
 from .calibration import Correction, correct_plate
 from .compare import Comparison, change_map
+from .dualexposure import MergeSettings, merge_exposures
 from .errors import CapacityExceeded, ExamError, InsufficientSupport
 from .geometry import stored_outline
 from .library import case_extent, expected_revision, get_array, public_record
@@ -157,6 +158,83 @@ class Processing:
         if label not in CASE_VIEWS[record['details']['kind']]:
             return None
         return get_array(queries, case_id, record['id'], label)
+
+    def resolve_references(self, queries, case_id, raw, profile_record=None):
+        if profile_record is not None:
+            inputs = profile_record['details']
+            dark = self.read_source(queries, case_id, inputs.get('dark'), 'dark', required=False)
+            flat = self.read_source(queries, case_id, inputs.get('flat'), 'flat', required=False)
+            return dark, flat
+        dark = self.read_source(queries, case_id, raw.get('dark'), 'dark', required=False)
+        flat = self.read_source(queries, case_id, raw.get('flat'), 'flat', required=False)
+        return dark, flat
+
+    def merge_pair(self, case_id, form):
+        raw = fields.request_object(form)
+        settings = MergeSettings.parse(raw)
+        with self.store.snapshot() as queries:
+            long_source = self.read_source(queries, case_id, raw.get('long'), 'radiograph')
+            short_source = self.read_source(queries, case_id, raw.get('short'), 'radiograph')
+            if long_source['id'] == short_source['id']:
+                raise ExamError('Choose separate long and short detector exposures.', field='short')
+            for key in ('width', 'height', 'bit_depth'):
+                if long_source['details'][key] != short_source['details'][key]:
+                    raise ExamError(
+                        'The long and short exposures must share dimensions and detector bit depth.',
+                        field='short',
+                    )
+            profile = None
+            if raw.get('profile'):
+                profile = queries.record(case_id, fields.item_id(raw.get('profile'), field='profile'), 'profile')
+            dark, flat = self.resolve_references(queries, case_id, raw, profile)
+            mask = self.read_source(queries, case_id, raw.get('mask'), 'mask', required=False)
+            inputs = profile['details'] if profile else raw
+            correction = Correction.from_payload(inputs)
+            mask_data = self.library.source_surface(queries, case_id, mask, role='mask').pixels if mask else None
+            frames = {}
+            for label, source in (('long', long_source), ('short', short_source)):
+                frames[label] = self.library.detector_frame(queries, case_id, source, 'radiograph')
+            dark_frame = self.library.detector_frame(queries, case_id, dark, 'dark') if dark else None
+            flat_frame = self.library.detector_frame(queries, case_id, flat, 'flat') if flat else None
+        corrected = {}
+        for label, source in (('long', long_source), ('short', short_source)):
+            corrected[label] = correct_plate(frames[label], dark_frame, flat_frame, mask_data, correction)
+        merged = merge_exposures(corrected['long'], corrected['short'], settings)
+        arrays = {
+            'signal': merged.surface.pixels,
+            'support': merged.surface.valid,
+            'weight': merged.weight,
+            'reasons': merged.reasons,
+            'raw': merged.raw,
+            'owner': merged.owner,
+            'conflict': merged.conflict,
+            'residual': merged.residual,
+        }
+        details = merged.summary | {
+            'model': correction.model,
+            'correction': correction.as_json(),
+            'long_exposure': long_source['id'],
+            'short_exposure': short_source['id'],
+            'long_name': long_source['name'],
+            'short_name': short_source['name'],
+            'session': long_source['details']['session'],
+            'session_date': long_source['details']['session_date'],
+            'dual_exposure': True,
+        }
+        dependencies = [
+            (record, relation)
+            for record, relation in (
+                (long_source, 'long_exposure'),
+                (short_source, 'short_exposure'),
+                (profile, 'correction_profile'),
+                (dark, 'dark_reference'),
+                (flat, 'flat_reference'),
+                (mask, 'acquisition_mask'),
+            )
+            if record
+        ]
+        output = RunOutput(details, arrays, dependencies)
+        return self.persist(case_id, 'plate', name_or(raw, 'Dual-exposure corrected plate'), output)
 
     def assemble(self, case_id, form):
         raw = fields.request_object(form)
@@ -377,6 +455,11 @@ class Processing:
             if run['details']['kind'] == 'mosaic':
                 result['coverage'] = int(get_array(queries, case_id, run_id, 'coverage')[y, x])
                 result['overlap_spread'] = float(get_array(queries, case_id, run_id, 'spread')[y, x])
+            elif run['details'].get('dual_exposure'):
+                owner_value = int(get_array(queries, case_id, run_id, 'owner')[y, x])
+                result['exposure_owner'] = {1: 'long', 2: 'short'}.get(owner_value)
+                result['exposure_conflict'] = bool(get_array(queries, case_id, run_id, 'conflict')[y, x])
+                result['conflict_residual'] = float(get_array(queries, case_id, run_id, 'residual')[y, x])
             return result
 
     def audit_box(self, case_id, run_id, form):

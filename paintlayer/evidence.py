@@ -398,13 +398,15 @@ class Evidence:
         kind = run['details']['kind']
         outputs = {
             'mosaic': ('coverage', 'spread', 'owner'),
-            'plate': ('reasons', 'raw'),
+            'plate': ('reasons', 'raw', 'owner', 'conflict', 'residual'),
             'registration': ('grid',),
             'quality': ('classification', 'response'),
             'support': ('classification', 'response'),
             'compare': ('classification', 'uncertainty'),
         }[kind]
         for name in outputs:
+            if name not in queries.blob_info(case_id, run['id']):
+                continue
             raster = get_array(queries, case_id, record_id, name)
             bundle.add(f'{root}/{name}.tiff', tiff_bytes(raster), 'auxiliary_raster')
 

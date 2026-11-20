@@ -262,6 +262,7 @@ def create_app(runtime):
     def create_run(case_id, operation):
         handler = {
             'calibrate': processing.calibrate,
+            'merge-exposures': processing.merge_pair,
             'assemble': processing.assemble,
             'register': processing.register,
             'quality': processing.audit,

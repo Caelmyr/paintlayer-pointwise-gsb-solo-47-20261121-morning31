@@ -3,7 +3,7 @@ import {
   sourceRoles, sourceUrl, stat, table,
 } from "./dom.js";
 import {
-  analysisForm, correctionForm, findingForm, mosaicForm, regionForm, registrationForm, runAnalysisForm,
+  analysisForm, correctionForm, findingForm, mergeExposureForm, mosaicForm, regionForm, registrationForm, runAnalysisForm,
 } from "./forms.js";
 
 const terminalColors = {
@@ -23,6 +23,7 @@ function directory(ctx) {
         el("p",{cls:"placeholder"},"Calibrate source plates to begin."))),
     toolSection("Image operations",el("div",{cls:"tools-list"},
       button("Calibrate plate",()=>correctionForm(ctx)),
+      button("Merge long / short exposure",()=>mergeExposureForm(ctx)),
       button("Assemble radiograph",()=>mosaicForm(ctx)),
       button("Register photograph",()=>registrationForm(ctx)),
       button("Audit acquisition quality",()=>runAnalysisForm(ctx,"quality")),
@@ -203,7 +204,10 @@ function viewportStage(ctx,selected,run,info,footer) {
     if(!run || ctx.state.source || !["mosaic","plate"].includes(run.details.kind)) return;
     try{
       const report=await api(`${ctx.root}/runs/${run.id}/probe`,"POST",{point,radius:2});
-      const summary=`${number(report.value)} ${report.units}${report.coverage ? ` · ${report.coverage} plate(s)` : ""}`;
+      let summary=`${number(report.value)} ${report.units}`;
+      if(report.coverage) summary += ` · ${report.coverage} plate(s)`;
+      if(report.exposure_owner) summary += ` · ${report.exposure_owner} exposure`;
+      if(report.exposure_conflict) summary += ` · conflict ${number(report.conflict_residual)}`;
       coordinate.textContent=report.value===null ? `(${point.join(", ")}) · unmeasured` : `(${point.join(", ")}) · ${summary}`;
     }catch(failure){alertUser(failure.message,"error");}
   });
@@ -322,9 +326,34 @@ function runReadout(ctx,run) {
     numericalHistogram(d.distribution),
     ctx.state.layer==="coverage" && legend([["#437078","One plate"],["#62a59e","Two plates"],["#99c8a2","Three or more"]]),
     details("Plate contributions",d.tiles));
-  if(kind==="plate") return el("div",{},
-    el("div",{cls:"stat-cards"},stat("Usable samples",percent(d.support.fraction)),stat("Rejected samples",number(d.reasons.flagged_pixels,0))),
-    numericalHistogram(d.distribution),details("Rejection counts",d.reasons));
+  if(kind==="plate") {
+    if(d.dual_exposure) {
+      const px=d.exposure_pixels, align=d.alignment;
+      return el("div",{},
+        el("div",{cls:"stat-cards"},
+          stat("Shared readings",number(px.shared,0)),
+          stat("Long only",number(px.long_only,0)),
+          stat("Short only",number(px.short_only,0)),
+          stat("Conflicts",number(d.conflict_pixels,0))),
+        el("div",{cls:"stat-cards"},
+          stat("Usable samples",percent(d.support.fraction)),
+          stat("Exposure ratio L/S",number(align.exposure_ratio_long_over_short)),
+          stat("Alignment samples",number(align.alignment_pixels,0)),
+          stat("Log-ratio sigma",number(align.robust_log_ratio_sigma))),
+        numericalHistogram(d.distribution),
+        (ctx.state.layer==="owner" || ctx.state.layer==="conflict" || ctx.state.layer==="residual") &&
+          legend([["#f1b75b","Long exposure"],["#6187d9","Short exposure"],["#d56349","Conflict"]]),
+        details("Exposure alignment and contributions",{
+          long_exposure:d.long_name, short_exposure:d.short_name,
+          alignment:align, exposure_pixels:px,
+          conflict_fraction:d.conflict_fraction, conflict_residual:d.conflict_residual,
+          conflict_components:d.conflict_components, reasons:d.reasons, settings:d.settings,
+        }));
+    }
+    return el("div",{},
+      el("div",{cls:"stat-cards"},stat("Usable samples",percent(d.support.fraction)),stat("Rejected samples",number(d.reasons.flagged_pixels,0))),
+      numericalHistogram(d.distribution),details("Rejection counts",d.reasons));
+  }
   if(kind==="registration") return el("div",{},
     el("div",{cls:"stat-cards"},stat("Fit error · px",number(d.rms_canvas_pixels)),stat("Usable canvas",percent(d.support.fraction))),
     table(["Landmark","Error · px"],d.landmarks.map((item,index)=>[item.label || index+1,number(item.canvas_residual)])),
