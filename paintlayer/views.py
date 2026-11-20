@@ -30,7 +30,7 @@ COVERAGE = (
 )
 CHANGE_PALETTE = (
     NIGHT, COLORS['gold'], COLORS['royal'], COLORS['gray'], COLORS['rust'],
-    COLORS['aqua'], COLORS['violet'],
+    COLORS['aqua'], COLORS['violet'], (226, 138, 196, 235),
 )
 OWNER_PALETTE = (
     NIGHT, COLORS['aqua'], COLORS['gold'], COLORS['violet'], COLORS['rust'],
@@ -44,11 +44,11 @@ DISPLAY_LAYERS = {
     'plate': {'signal', 'support', 'weight', 'reasons', 'raw'},
     'mosaic': {'signal', 'support', 'coverage', 'spread', 'owner', 'quality'},
     'registration': {'photo', 'support', 'grid'},
-    'compare': {'difference', 'support', 'classification', 'uncertainty'},
+    'compare': {'difference', 'support', 'classification', 'uncertainty', 'correction', 'adjustment'},
     'quality': {'signal', 'support', 'classification', 'response'},
     'support': {'signal', 'support', 'classification', 'response'},
 }
-SCALED_LAYERS = {'spread', 'uncertainty'}
+SCALED_LAYERS = {'spread', 'uncertainty', 'adjustment'}
 VIEW_MODES = {'blend', 'split', 'checker'}
 IMAGE_DEFAULTS = {'registration': 'photo', 'compare': 'difference'}
 
@@ -256,6 +256,20 @@ class Views:
             return flag_palette(values, REASON_COLORS)
         if layer == 'classification':
             return self.classification(kind, values)
+        if layer == 'correction':
+            available = set(queries.blob_info(case_id, run['id']))
+            if 'correction' not in available:
+                values = np.ones(values.shape, dtype=np.float32)
+            return gradient_rgba(values, values > 0, (0, 1), (35, 67, 67, 70), COLORS['teal'])
+        if layer == 'adjustment':
+            support = clipped_array(get_array(queries, case_id, run['id'], 'support'), crop)
+            available = set(queries.blob_info(case_id, run['id']))
+            if 'adjustment' not in available:
+                values = np.zeros(values.shape, dtype=np.float32)
+            limits = display_range(values, support, (1, 99))
+            if limits[0] == limits[1]:
+                limits = (-max(abs(limits[0]), 1e-6), max(abs(limits[1]), 1e-6))
+            return diverging_rgba(values, support, limits)
         if layer == 'weight':
             return gradient_rgba(values, values > 0, (0, 1), (35, 67, 67, 204), COLORS['aqua'])
         if layer in SCALED_LAYERS:

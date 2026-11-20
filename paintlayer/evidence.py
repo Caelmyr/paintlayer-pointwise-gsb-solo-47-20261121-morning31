@@ -402,9 +402,12 @@ class Evidence:
             'registration': ('grid',),
             'quality': ('classification', 'response'),
             'support': ('classification', 'response'),
-            'compare': ('classification', 'uncertainty'),
+            'compare': ('classification', 'uncertainty', 'correction', 'adjustment'),
         }[kind]
+        available = set(queries.blob_info(case_id, record_id))
         for name in outputs:
+            if name not in available:
+                continue
             raster = get_array(queries, case_id, record_id, name)
             bundle.add(f'{root}/{name}.tiff', tiff_bytes(raster), 'auxiliary_raster')
 

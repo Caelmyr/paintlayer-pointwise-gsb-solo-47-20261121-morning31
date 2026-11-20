@@ -45,7 +45,7 @@ CASE_VIEWS = {
     'plate': ('signal', 'support', 'weight', 'reasons', 'raw'),
     'mosaic': ('signal', 'support', 'coverage', 'spread', 'owner', 'quality'),
     'registration': ('photo', 'support', 'grid'),
-    'compare': ('difference', 'support', 'classification', 'uncertainty'),
+    'compare': ('difference', 'support', 'classification', 'uncertainty', 'correction', 'adjustment'),
     'quality': ('signal', 'support', 'classification', 'response'),
     'support': ('signal', 'support', 'response', 'classification'),
 }

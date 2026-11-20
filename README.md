@@ -42,7 +42,7 @@ Open the training examination for a fictional painting with an invented acquisit
 | Workbench → Inspect stretcher bands | Consider long horizontal and vertical contrast structures with usable fraction and supporting extent. The results are visual hypotheses. |
 | Measurements → Inspect texture | Inspect spatial frequency, directional strength and possible repeat spacing in a bounded patch. |
 | Measurements → Audit detector | Compare flat/dark gain and detector axes using gain and irregularity maps. |
-| Workbench → Compare visits | Review earlier-only, later-only, stable, changed and unresolved regions using shared usable samples and optional stable-reference correction. |
+| Workbench → Compare visits | Review earlier-only, later-only, stable, changed and unresolved pixels using shared usable samples and optional stable-reference correction. Tick several distributed stable regions for a spatial correction: a weighted plane plus local interpolation restores the exposure gradient between them, while pixels beyond the references' bounded reach are held as pending review instead of being called changes. |
 | Workbench → Capture finding / Evidence → Export bundle | Preserve a marked crop, current display state, numerical measurement and source hashes. Verify and download a ZIP containing selected findings, TIFF values, validity masks and provenance. |
 | Evidence → Build contact sheet | Align crop reproductions at the same print scale, check the first-page preview and download a PDF with an actual-size print reference and layout data. |
 
@@ -50,7 +50,7 @@ The working representation uses zero-based pixel centres, x from the left and y 
 
 An imported image can be at most 28 MiB, 4096 pixels on a side and five million pixels. An examination canvas can contain up to six million pixels. One assembly can use at most 16 plates and 22 million aggregate plate pixels. ZIP, sheet and case allowances bound long-running work and storage. The demo uses 718 × 545 canvas pixels. The TIFF export accompanying each numerical layer carries a separate validity mask. A valid numerical zero is a measurement. Current runs retain the input region and session revisions they used. Evidence exports from older workspaces flag historical revisions whose original state cannot be recovered.
 
-Values are relative and depend on the acquisition conditions. The calibrated blend is a confidence-weighted feathered mean. Difference classification carries overlap disagreement as a heuristic uncertainty, and stretcher/texture inspection summarizes patterns from known sample support. These are not absolute material identification or instruments for physical radiation acquisition.
+Values are relative and depend on the acquisition conditions. The calibrated blend is a confidence-weighted feathered mean. Difference classification carries overlap disagreement as a heuristic uncertainty, and stretcher/texture inspection summarizes patterns from known sample support. Spatial drift correction trusts its fitted gradient only within a bounded reach of the accepted stable references; out-of-reach samples and self-contradicting references are reported explicitly rather than corrected. These are not absolute material identification or instruments for physical radiation acquisition.
 
 ## Source structure
 

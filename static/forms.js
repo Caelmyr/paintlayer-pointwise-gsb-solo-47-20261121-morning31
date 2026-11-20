@@ -433,15 +433,29 @@ export function analysisResult(ctx,kind,report,record=null) {
 export function runAnalysisForm(ctx, kind) {
   const isQuality=kind==="quality", isCompare=kind==="compare";
   const labels={quality:"Audit acquisition quality",support:"Inspect stretcher bands",compare:"Compare visits"};
+  const spatial=el("div",{cls:"fields",hidden:true,style:{display:"none"}});
+  const spatialToggle=el("input",{type:"checkbox",name:"spatial_correction"});
+  function buildReferences(){
+    const referenceRegions=ctx.data.regions.filter(item=>item.details.category==="reference");
+    spatial.replaceChildren(
+      el("p",{cls:"placeholder"},"Tick several regions known to be unchanged, spread across the canvas. "
+        +"The correction restores a gradient between them; pixels outside their reach are marked pending review instead of being called changes."),
+      referenceRegions.length ? checks("references",referenceRegions,[]) :
+        el("p",{cls:"placeholder"},"Save regions with the Stable reference category first.")
+    );
+  }
   const basic=[
     input("Run name","name","text",labels[kind]),
     ...(isCompare ? [
       fieldsGrid(select("Earlier assembly","earlier",option(runs(ctx,"mosaic")),"",{required:true}),
         select("Later assembly","later",option(runs(ctx,"mosaic")),existingMosaic(ctx),{required:true})),
-      select("Stable reference region (optional)","reference",option(ctx.data.regions,"No reference correction")),
+      field("Multi-region spatial correction",spatialToggle),
+      select("Single stable reference region (optional)","reference",option(ctx.data.regions,"No reference correction")),
+      spatial,
     ] : [select("Assembled radiograph","run",option(runs(ctx,"mosaic")),existingMosaic(ctx),{required:true})]),
     optionalRegion(ctx),
   ];
+  if(isCompare) buildReferences();
   const specific = isQuality ? [
     fieldsGrid(input("Desired overlap count","min_overlap","number",2,{min:1,max:16}),
       input("Disagreement threshold","max_spread","number",.075,{step:"any",min:0})),
@@ -456,14 +470,32 @@ export function runAnalysisForm(ctx, kind) {
       input("Continuity floor","continuity","number",.45,{step:.05,min:.05,max:.95})),
     input("Contrast threshold","minimum_strength","number",.045,{step:"any",min:.0001}),
   ];
-  showDialog(labels[kind],[el("div",{cls:"fields"},basic,specific)],async data=>{
+  const active=showDialog(labels[kind],[el("div",{cls:"fields"},basic,specific)],async data=>{
     const payload=Object.fromEntries(data);
     for(const key of ["min_overlap","max_spread","spike_threshold","minimum_area","threshold","spread_weight","width","continuity","minimum_strength"]){
       if(data.has(key)) payload[key]=fnum(data,key);
     }
+    if(isCompare){
+      const useSpatial=data.has("spatial_correction");
+      payload.spatial_correction=useSpatial;
+      if(useSpatial){
+        payload.references=data.getAll("references");
+        delete payload.reference;
+        if(payload.references.length<2) throw new Error("Select at least two stable reference regions for a spatial correction.");
+      }else{
+        delete payload.references;
+      }
+    }
     const result=await api(`${ctx.root}/runs/${kind}`,"POST",payload);
     await done(ctx,"Analysis result created.",result,{tab:"workbench",layer:isCompare?"difference":"classification"});
   },{confirm:isQuality?"Run acquisition audit":isCompare?"Calculate change":"Inspect bands"});
+  if(isCompare){
+    spatialToggle.addEventListener("change",()=>{
+      spatial.hidden=!spatialToggle.checked;
+      spatial.style.display=spatial.hidden?"none":"";
+      active.form.elements.reference.disabled=spatialToggle.checked;
+    });
+  }
 }
 
 export function findingForm(ctx) {

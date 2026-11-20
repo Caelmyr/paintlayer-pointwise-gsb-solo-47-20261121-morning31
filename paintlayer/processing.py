@@ -271,6 +271,23 @@ class Processing:
         output = RunOutput(details, arrays, related)
         return self.persist(case_id, 'support', name_or(raw, 'Stretcher band inspection'), output)
 
+    def reference_inputs(self, queries, case_id, raw, field_name, *, maximum=8):
+        values = raw.get(field_name)
+        if values is None:
+            return [], []
+        if not isinstance(values, list):
+            values = [values]
+        keys = [fields.item_id(value, field=field_name) for value in values]
+        fields.unique(keys, field=field_name)
+        if len(keys) > maximum:
+            raise ExamError(f'Choose at most {maximum} stable reference regions.', field=field_name)
+        records, outlines = [], []
+        for key in keys:
+            record = queries.record(case_id, key, 'region')
+            records.append(record)
+            outlines.append((record, stored_outline(record['details']['geometry'])))
+        return records, outlines
+
     def compare(self, case_id, form):
         raw = fields.request_object(form)
         definition = Comparison.parse(raw)
@@ -283,14 +300,21 @@ class Processing:
                 raise ExamError('Choose visits calibrated with the same numerical model.', field='later')
             domain_region, domain = self.region_input(queries, case_id, raw, 'region')
             reference_region, reference = self.region_input(queries, case_id, raw, 'reference')
+            reference_records, reference_pairs = self.reference_inputs(queries, case_id, raw, 'references')
+            if reference_pairs and reference is not None:
+                raise ExamError(
+                    'Use either the single stable reference or the multi-region spatial correction, not both.',
+                    field='references',
+                )
             earlier_data = self.surface(queries, case_id, earlier)
             later_data = self.surface(queries, case_id, later)
             source_spread = get_array(queries, case_id, earlier['id'], 'spread')
             later_spread = get_array(queries, case_id, later['id'], 'spread')
-        summary, difference, uncertainty, classes = change_map(
+        details, products = change_map(
             earlier_data, later_data, source_spread, later_spread, definition, domain, reference,
+            references=reference_pairs,
         )
-        details = summary | {
+        details = details | {
             'unit': earlier['details']['unit'],
             'earlier': earlier['id'],
             'later': later['id'],
@@ -302,11 +326,15 @@ class Processing:
             deps.append((domain_region, 'inspection_region'))
         if reference_region:
             deps.append((reference_region, 'stable_reference'))
+        for record in reference_records:
+            deps.append((record, 'stable_reference'))
         arrays = {
-            'difference': difference.pixels,
-            'support': difference.valid,
-            'uncertainty': uncertainty,
-            'classification': classes,
+            'difference': products['difference'].pixels,
+            'support': products['difference'].valid,
+            'uncertainty': products['uncertainty'],
+            'classification': products['classification'],
+            'correction': products['correction'],
+            'adjustment': products['adjustment'],
         }
         return self.persist(case_id, 'compare', name_or(raw, 'Visit comparison'), RunOutput(details, arrays, deps))
 

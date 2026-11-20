@@ -329,10 +329,34 @@ function runReadout(ctx,run) {
     el("div",{cls:"stat-cards"},stat("Fit error · px",number(d.rms_canvas_pixels)),stat("Usable canvas",percent(d.support.fraction))),
     table(["Landmark","Error · px"],d.landmarks.map((item,index)=>[item.label || index+1,number(item.canvas_residual)])),
     details("Transform and withheld points",d));
-  if(kind==="compare") return el("div",{},
-    el("div",{cls:"stat-cards"},stat("Paired samples",percent(d.paired_support.fraction)),stat("Reference offset",number(d.reference_offset))),
-    table(["Class","Pixels"],Object.entries(d.class_counts).map(([k,v])=>[k.replaceAll("_"," "),number(v,0)])),
-    legend([["#d86d50","Positive"],["#157898","Negative"],["#9f86d2","Unresolved"]]));
+  if(kind==="compare"){
+    const drift=d.drift_correction || {};
+    const spatial=drift.reference_count>1;
+    const cards=spatial ? [
+      stat("Paired samples",percent(d.paired_support.fraction)),
+      stat("Reference regions",`${drift.accepted_count}/${drift.reference_count}`),
+      stat("Median drift",number(d.reference_offset)),
+      stat("Pending review",number(d.pending_review_pixels,0)),
+    ] : [
+      stat("Paired samples",percent(d.paired_support.fraction)),
+      stat("Reference offset",number(d.reference_offset)),
+    ];
+    const referenceRows=(drift.references||[]).map(item=>[
+      item.name || "Reference",
+      item.accepted ? "accepted" : "excluded",
+      number(item.median_offset),
+      number(item.robust_scatter),
+      item.reason || "",
+    ]);
+    return el("div",{},
+      el("div",{cls:"stat-cards"},...cards),
+      spatial && el("p",{cls:"placeholder"},
+        `${drift.mode==="none" ? "No" : drift.mode.replace("_"," ")} correction · reach ${number(drift.reach_radius_px,0)} px · `
+        +`${percent(d.corrected_support_fraction)} of paired samples judged; ${number(d.pending_review_pixels,0)} held pending review.`),
+      referenceRows.length && table(["Reference region","Status","Median offset","Robust scatter","Note"],referenceRows),
+      table(["Class","Pixels"],Object.entries(d.class_counts).map(([k,v])=>[k.replaceAll("_"," "),number(v,0)])),
+      legend([["#d86d50","Denser"],["#157898","Less dense"],["#9f86d2","Unresolved"],["#e28ac4","Pending review"]]));
+  }
   if(kind==="quality") return el("div",{},
     el("div",{cls:"stat-cards"},stat("Flagged pixels",number(d.flagged_pixels,0)),stat("Multiple conditions",number(d.multiple_reasons,0))),
     table(["Condition","Pixels","Groups"],d.classes.map(item=>[item.key.replaceAll("_"," "),number(item.pixels,0),item.count])),
