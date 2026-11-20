@@ -333,6 +333,16 @@ def create_app(runtime):
     def save_sheet(case_id):
         return atlas.save(case_id, body()), 201
 
+    @app.post('/api/cases/<case_id>/tiles/preview')
+    @image_work
+    def preview_tiles(case_id):
+        return image_response(atlas.tile_preview(case_id, body()))
+
+    @app.post('/api/cases/<case_id>/tiles')
+    @image_work
+    def save_tiles(case_id):
+        return atlas.save_tiles(case_id, body()), 201
+
     @app.get('/api/cases/<case_id>/records/<record_id>')
     def record_metadata(case_id, record_id):
         return library.lookup(case_id, record_id)

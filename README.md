@@ -45,8 +45,11 @@ Open the training examination for a fictional painting with an invented acquisit
 | Workbench → Compare visits | Review earlier-only, later-only, stable, changed and unresolved regions using shared usable samples and optional stable-reference correction. |
 | Workbench → Capture finding / Evidence → Export bundle | Preserve a marked crop, current display state, numerical measurement and source hashes. Verify and download a ZIP containing selected findings, TIFF values, validity masks and provenance. |
 | Evidence → Build contact sheet | Align crop reproductions at the same print scale, check the first-page preview and download a PDF with an actual-size print reference and layout data. |
+| Evidence → Build tiled print | Reproduce one canvas region at the examination's real scale across as many paper pages as it needs, with matching overlap bands and join lines, so the taped-together pages stay at original size. |
 
 The working representation uses zero-based pixel centres, x from the left and y from the top. Bounds are x, y, width, height. Imported visible photographs use their orientation metadata. Detector images preserve stored pixel order and accept unsigned MinIsBlack 8- or 16-bit TIFF/PNG; visible JPEG is also accepted. Masks count nonzero grayscale pixels as usable. The page dialog inspects up to eight frames per window among the first 48 TIFF pages.
+
+A tiled print uses the examination's mm-per-pixel canvas scale; it needs a scale on the case and one result in the shared canvas. Page windows advance in whole canvas pixels and every page is drawn at the same print scale, so a shared band covers the same canvas coordinates on both pages, and unsupported gaps keep their coordinates across a join. The chosen protected area is outlined on each page and kept inside one page's window whenever the paper allows; when it cannot be, the shared band at that join is widened or the pages are re-spaced so the focus appears on both neighbours, and the printed crosses name the same canvas coordinate on each. The layout JSON records every page window, join line, shared band and match mark. The 20 mm check confirms the reproduction scale after printing.
 
 An imported image can be at most 28 MiB, 4096 pixels on a side and five million pixels. An examination canvas can contain up to six million pixels. One assembly can use at most 16 plates and 22 million aggregate plate pixels. ZIP, sheet and case allowances bound long-running work and storage. The demo uses 718 × 545 canvas pixels. The TIFF export accompanying each numerical layer carries a separate validity mask. A valid numerical zero is a measurement. Current runs retain the input region and session revisions they used. Evidence exports from older workspaces flag historical revisions whose original state cannot be recovered.
 
@@ -57,7 +60,7 @@ Values are relative and depend on the acquisition conditions. The calibrated ble
 - `paintlayer/web.py` and `paintlayer/__main__.py` provide the HTTP and Waitress entry points.
 - `paintlayer/library.py`, `paintlayer/store.py` and `paintlayer/intake.py` maintain the notebook, blob references and image ingestion.
 - `paintlayer/processing.py` joins detector correction, placement, registration and quantitative outputs.
-- `paintlayer/views.py`, `paintlayer/evidence.py` and the atlas modules generate presentation and portable reports.
+- `paintlayer/views.py`, `paintlayer/evidence.py` and the atlas modules generate presentation and portable reports. `atlas_tiles.py` plans the actual-size page grid and `atlas_tile_render.py` draws its pages and PDF.
 - `static/` holds the browser entry point and examination controls. All resources are local.
 
 Recalculate Python backend effective lines with `python scripts/count_backend.py --project-root . --source-root paintlayer`.

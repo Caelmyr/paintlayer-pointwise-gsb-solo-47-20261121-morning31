@@ -1,7 +1,7 @@
 import {
-  el, api, alertUser, area, badge, button, checkbox, checks, download, field, fieldsGrid, fileUrl,
-  fnum, input, jspec, number, option, percent, regionKinds, runKinds, select, showDialog, sourceRoles,
-  sourceUrl, runUrl, stat, table, details,
+  el, api, alertUser, area, badge, button, checkbox, checks, details, download, field, fieldsGrid, fileUrl,
+  fnum, input, jspec, layerLabels, number, option, percent, regionKinds, runKinds, runLayers, select,
+  showDialog, sourceRoles, sourceUrl, runUrl, stat, table,
 } from "./dom.js";
 
 function done(ctx, message, record, options = {}) {
@@ -551,6 +551,70 @@ export function sheetForm(ctx) {
     await done(ctx,"Contact sheet saved.",result,{tab:"evidence"});
   },{confirm:"Save printable PDF",wide:true});
   active.dialog.addEventListener("close",()=>{if(previewUrl) URL.revokeObjectURL(previewUrl);},{once:true});
+}
+
+export function tileForm(ctx) {
+  const accepted=ctx.data.runs.filter(item=>item.details.kind!=="plate");
+  const initial=ctx.data.case.working_run || accepted[0]?.id;
+  const preview=el("div",{});
+  const planNote=el("p",{cls:"placeholder"},"The crop is reproduced at the examination's canvas scale across as many pages as it needs. Print at 100%, match the numbered crosses in each overlap band, and join the pages.");
+  let previewUrl=null;
+  const runSelect=select("Surface","run",option(accepted,"Choose result"),initial || "",{required:true});
+  const layerSelect=select("Display layer","layer",layersFor(ctx,initial),"signal");
+  const base=el("div",{cls:"fields"},
+    input("Tiled print title","name","text","Actual-size detail print",{required:true}),
+    fieldsGrid(runSelect,layerSelect),
+    fieldsGrid(select("Region to reproduce","region",option(ctx.data.regions,"Entire canvas")),
+      select("Keep seams clear of","focus",option(ctx.data.regions,"No protected area"),ctx.state.region || "")),
+    area("Crop box [x,y,width,height] (optional)","box","",{placeholder:"[0,0,718,545]"}),
+    el("p",{cls:"placeholder"},"The crop is what gets reproduced at the canvas scale. The protected area is kept away from page joins when the paper allows; it is outlined on the printed pages and its area is marked on both pages of a join when it cannot be avoided."),
+    el("div",{cls:"field-grid four"},
+      select("Paper","paper",[["a4","A4"],["letter","Letter"],["a3","A3"]]),
+      select("Orientation","orientation",[["portrait","Portrait"],["landscape","Landscape"]]),
+      select("Resolution","dpi",[[144,"144 DPI"],[192,"192 DPI"],[240,"240 DPI"]]),
+      input("Margins · mm","margin","number",10,{min:7,max:25})),
+    fieldsGrid(input("Overlap band · mm","overlap","number",12,{min:4,max:40,step:1}),
+      input("Plate note","note","text","",{maxLength:180})),
+    el("div",{cls:"bar"},button("Preview first page",async()=>{
+      active.error.textContent="";
+      try{
+        const blob=await api(`${ctx.root}/tiles/preview`,"POST",tilePayload(new FormData(active.form)));
+        if(previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl=URL.createObjectURL(blob);
+        preview.replaceChildren(el("img",{cls:"preview-sheet",src:previewUrl,alt:"First page of the actual-size tiled print"}));
+      }catch(error){active.error.textContent=error.message;}
+    })),planNote,preview);
+  function tilePayload(data){
+    const layers=layersFor(ctx,data.get("run"));
+    const payload={
+      name:data.get("name"),run:data.get("run"),layer:data.get("layer") || layers[0]?.[0],
+      region:data.get("region") || null,focus:data.get("focus") || null,note:data.get("note") || "",
+      format:{paper:data.get("paper"),orientation:data.get("orientation"),dpi:fnum(data,"dpi"),
+        margin:fnum(data,"margin"),overlap:fnum(data,"overlap")},
+    };
+    const box=jspec(data,"box");
+    if(box) payload.box=box;
+    return payload;
+  }
+  const active=showDialog("Build actual-size tiled print",[base],async data=>{
+    const result=await api(`${ctx.root}/tiles`,"POST",tilePayload(data));
+    const grid=result.details.grid;
+    await done(ctx,`Tiled print saved: ${grid.pages} page${grid.pages===1?"":"s"} at actual size.`,result,{tab:"evidence"});
+  },{confirm:"Save tiled PDF",wide:true});
+  function refreshLayers(){
+    const rows=layersFor(ctx,active.form.elements.run.value);
+    const current=active.form.elements.layer.value;
+    layerSelect.querySelector("select").replaceChildren(...rows.map(([key,label])=>el("option",{value:key},label)));
+    if(rows.some(([key])=>key===current)) layerSelect.querySelector("select").value=current;
+  }
+  active.form.elements.run.addEventListener("change",refreshLayers);
+  active.dialog.addEventListener("close",()=>{if(previewUrl) URL.revokeObjectURL(previewUrl);},{once:true});
+}
+
+function layersFor(ctx,runId){
+  const run=ctx.data?.runs.find(item=>item.id===runId);
+  const layers=runLayers[run?.details.kind] || ["signal"];
+  return layers.map(key=>[key,layerLabels[key] || key]);
 }
 
 export function sourceInspect(ctx, source){

@@ -4,7 +4,7 @@ import {
 } from "./dom.js";
 import {
   analysisForm, analysisResult, archiveForm, caseForm, correctionForm, findingForm, intakeForm,
-  regionForm, runAnalysisForm, sessionForm, sheetForm, sourceInspect,
+  regionForm, runAnalysisForm, sessionForm, sheetForm, sourceInspect, tileForm,
 } from "./forms.js";
 import { drawWorkbench } from "./workbench.js";
 
@@ -251,17 +251,38 @@ function evidencePage(){
       `${record.details.unresolved_input_revisions} historical input revision(s) could not be verified. The ZIP includes the preserved numerical results and lists those revisions in its manifest.`),
     details("Package SHA-256",record.details.sha256),
   ],"Evidence ZIP"));
-  const sheets=ctx.data.sheets.map(record=>card(record.name,
+  const sheets=ctx.data.sheets.filter(record=>record.details.mode!=="actual_size_tiles").map(record=>card(record.name,
     `${record.details.pages.length} page(s) · ${record.details.paper.paper.toUpperCase()} · ${record.details.paper.dpi} DPI`,
     el("div",{cls:"bar"},download("Printable PDF",fileUrl(ctx.root,record.id,"pdf")),download("Layout JSON",fileUrl(ctx.root,record.id,"layout"))),
     "Contact sheet",el("img",{src:fileUrl(ctx.root,record.id,"preview"),alt:"Contact sheet first page",loading:"lazy"})));
+  const tiles=ctx.data.sheets.filter(record=>record.details.mode==="actual_size_tiles").map(record=>{
+    const d=record.details;
+    const grid=d.grid || {pages:1,rows:1,columns:1};
+    const focus=d.focus || {status:"none"};
+    return card(record.name,
+      `${grid.pages} page${grid.pages===1?"":"s"} · ${grid.rows} × ${grid.columns} grid · ${d.paper.paper.toUpperCase()} ${d.paper.dpi} DPI`,
+      [el("p",{cls:"placeholder"},`${number(d.printed_size_mm[0],1)} × ${number(d.printed_size_mm[1],1)} mm when assembled · ${focusSummary(d.focus)}.`),
+        d.focus?.clipped_to_crop && el("p",{cls:"inline-message"},"Part of the protected area lies outside the printed crop, so it is shown only where the crop covers it."),
+        el("div",{cls:"bar"},download("Tiled PDF",fileUrl(ctx.root,record.id,"pdf")),download("Layout JSON",fileUrl(ctx.root,record.id,"layout")))],
+      "Tiled actual-size print",el("img",{src:fileUrl(ctx.root,record.id,"preview"),alt:"First page of the actual-size tiled print",loading:"lazy"}));
+  });
   return el("main",{cls:"workspace-page"},
     titleBar("Examination findings",button("Capture finding",()=>findingForm(ctx),"primary")),
     findings.length ? cards(findings) : empty("Capture a finding from the workbench to preserve an image, its settings and measurement context."),
     titleBar("Evidence bundles",button("Export bundle",()=>archiveForm(ctx))),
     archives.length ? cards(archives) : empty("Build a ZIP of the selected results and findings with its manifest."),
     titleBar("Print contact sheets",button("Build contact sheet",()=>sheetForm(ctx))),
-    sheets.length ? cards(sheets) : empty("Lay out registered images and selected areas at a consistent print scale."));
+    sheets.length ? cards(sheets) : empty("Lay out registered images and selected areas at a consistent print scale."),
+    el("div",{cls:"catalog-title"},titleBar("Actual-size tiled prints",button("Build tiled print",()=>tileForm(ctx)))),
+    tiles.length ? cards(tiles) : empty("Reproduce one canvas region at real size across overlapping pages that join back into the original."));
+}
+
+function focusSummary(focus){
+  if(!focus || focus.status==="none") return "no protected seam area";
+  if(focus.status==="single_page") return "joins kept clear of the protected area";
+  if(focus.status==="overlap_band") return "protected area carried by both pages of the join";
+  if(focus.status==="partly_shared") return "protected area partly shared across joins";
+  return "a join crosses the protected area";
 }
 
 function render(){
