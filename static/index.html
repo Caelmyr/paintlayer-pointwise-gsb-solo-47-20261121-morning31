@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PaintLayer Desk</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" id="home-link" aria-label="PaintLayer Desk home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>PaintLayer<span class="brand-accent"> Desk</span></span></a>
+    <nav id="main-nav" aria-label="Workspace"></nav>
+    <div class="header-actions"><span class="local-mark"><i></i> Local workspace</span><button class="button secondary" id="new-case" type="button">New examination</button></div>
+  </header>
+  <div id="app" aria-busy="true"><div class="loading-note">Opening the conservation desk…</div></div>
+  <aside id="announcements" role="status" aria-live="polite"></aside>
+  <dialog id="dialog"></dialog>
+</body>
+</html>
